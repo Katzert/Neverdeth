@@ -1,176 +1,271 @@
 # INFORME PARA ARGON — NeverDead PC Recompilation
-**Fecha:** 3 de noviembre de 2026 · **Versión:** v10 (sustituye a v9; autocontenido)
-**Binario:** `build_clang/neverdead.exe` (01:39, 38.836.224 B) · **Commit:** `0ee25c2`
-**Grafo:** 703 nodos · 867 aristas · 34 comunidades · `docs/GRAFO_ARGON.txt` (34 KB, 289 líneas)
+**Fecha:** 3 de noviembre de 2026 · **Versión:** v11 (sustituye a v10; autocontenido)
+**Binario:** `build_clang/neverdead.exe` (09:35, 38.843.392 B) · **Commit:** `c07aa8c`
+**Grafo:** 710 nodos · 883 aristas · 34 comunidades · `docs/GRAFO_ARGON.txt` (34 KB, 290 líneas)
+
+> **Lo esencial de este turno es una corrección de método.** La medición
+> anterior del ring se hizo con esperas fijas y cayó en el menú, no en el juego.
+> Aquí están los números de gameplay 3D verificado y lo que implican.
 
 ---
 
 ## 0. Resumen ejecutivo
 
-| Tema | Estado | Dato |
-|---|---|---|
-| 30 FPS por defecto en el host | **HECHO** | GPU 97 % → **42 %** con todo ON |
-| Pacer híbrido (Sleep + spin) | **HECHO** | `timeBeginPeriod(1)` + `Sleep(rest−1,5)` si >2 ms |
-| Combos en Dark Mode | **HECHO** | `DarkMode_CFD` funciona; `SetWindowTheme(h,"","")` no hacía nada |
-| Medición real de GPU (`nvidia-smi`) | **HECHO** | 3 casos, 30 muestras c/u |
-| Auditoría interlock ROV | **CORREGIDAS 2 premisas** | no hay interlock en D3D12 |
-| Rebuild de `rexgpu-xenos.dll` | **POSIBLE pero no hecho** | árbol configurado, DLL nunca construida |
-| Cuarentena 1,7 GB | **ELIMINADA** | 9,0 GB libres |
+| Pregunta | Respuesta medida |
+|---|---|
+| ¿NeverDead usa Predicated Tiling a 720p? | **No.** 0 paquetes `SET_BIN_MASK`/`SET_BIN_SELECT` en 540 frames de gameplay. |
+| ¿Usa 2x MSAA? | **No** en la superficie principal: `msaa_samples = 0` (1x). El 2x aparece solo transitorio en superficies auxiliares. |
+| ¿Cuántos draws/resolves por frame? | **725 draws** y **29 resolves**. |
+| ¿Dónde está el coste entonces? | **En CPU**: 154.861 escrituras de registro + 433 subidas de microcódigo de shader + 535 cargas de constantes por frame. |
+| ¿El desfase 30 vs invitado? | En gameplay el invitado va a **38,0 FPS**; se tiran **8 de cada 38 frames (21 %)**. |
+| ¿Se puede frenar al invitado? | Sí, y se implementó. Pero cuesta presentación (30→22), así que va **opt-in**. |
 
 ---
 
-## 1. T1 — 30 FPS por defecto y pacer de bajo consumo
+## 1. La corrección: qué se midió mal y por qué
 
-### 1.1 Cambios
+`tools/bench_v6.py` usa el protocolo heredado de v4: lanzar, esperar 45 s fijos,
+asumir que el juego ya está en el hospital. En la práctica el auto-avance no es
+determinista: en la primera pasada de este turno las ventanas `[RING]` cayeron
+en el menú/carga y dieron **50 draws / 19 resolves**. Esos números eran
+plausibles, así que pasaron el filtro. No lo eran.
 
-- `g_fps_target` arranca en **`30.0f`** (antes `0.0f`), y `NdInitFpsMode()` también
-  (la variable de entorno `ND_FPS_LIMIT` sigue teniendo prioridad).
-- **La regla de estabilidad se respeta:** `NdSyncFpsClampMemory()` y `NdSetFpsLimitHook()`
-  siguen escribiendo **`0.0f`** en `0x82B31FBC`. Solo el pacer del host limita.
-- `NdEnsureTimerResolution()` (`timeBeginPeriod(1)`, `std::call_once`) llamado desde
-  `NdEarlyInit()` y desde `NdInitPacer()`. Sin esto `Sleep()` tiene granularidad de 15,6 ms
-  y un frame de 33,3 ms se convierte en 46 ms.
-- `NdApplyFramePacer()`: si quedan **>2 ms**, `Sleep(remaining_ms − 1.5)`; el resto, spin de
-  precisión con `QueryPerformanceCounter`. Sustituye al `SetWaitableTimer`.
-  **Ese sueño real es lo que libera la cola de envío de la GPU** y explica la caída de vatios.
-- Combo FPS: `CB_SETCURSEL, 2` → arranca en **"30 FPS"**, coherente con el host.
-- Combos: `SetWindowTheme(h, L"DarkMode_CFD", nullptr)` — ver §4.
+**Arreglo:** `tools/bench_ring.py` muestrea la ventana cada 2 s y calcula la
+fracción de píxeles no negros:
 
-### 1.2 Por qué importa el `Sleep` y no solo el límite
+| Escena | No-negro |
+|---|---|
+| Menú / carga | 0 – 72 % (muy variable) |
+| Gameplay 3D | **> 93 %** |
 
-Limitar con spin puro mantiene el hilo al 100 % de un core y no deja respirar al driver.
-Con `Sleep` el hilo que presenta cede la CPU entre frames, la cola de D3D12 se vacía con
-margen y la GPU baja de frecuencia de trabajo. La diferencia se ve en la tabla de §2:
-**33 W menos** con el mismo contenido en pantalla.
+Exige **3 muestras seguidas > 80 %** antes de contar nada, guarda una captura de
+prueba y solo analiza las ventanas `[RING]` posteriores a esa marca. La captura
+de la corrida válida está en `docs/assets/ring_gameplay_proof.png`: pasillo del
+hospital, personaje, HUD de munición, god rays, profundidad de geometría.
 
----
-
-## 2. T2 — Consumo real de GPU (`nvidia-smi`)
-
-RTX 2060 (límite 160 W), escena del hospital, 15 s de muestreo cada 500 ms tras 45 s de
-arranque y 3 s de asentamiento. Arnés: `tools/bench_gpu.py 1|2|3`.
-
-| Caso | Configuración | GPU | Mem GPU | Potencia | Temp | ms/frame | FPS |
-|---|---|---|---|---|---|---|---|
-| **1** | 30 FPS + Bajo Consumo (16 flags OFF) | **25,3 %** | 4,0 % | **40,0 W** | 58,9 °C | 30,87 | 32,4 |
-| **2** | 30 FPS + Calidad Original (todo ON) | **41,9 %** | 8,6 % | **64,6 W** | 63,8 °C | 28,00 | 35,7 |
-| **3** | Ilimitado + Calidad Original | **97,3 %** | 23,3 % | **97,9 W** | 70,1 °C | 10,51 | 95,2 |
-
-**Lectura:**
-
-- El límite de 30 FPS es **la optimización más rentable medida hasta ahora**: −57 puntos de
-  GPU y −33 W **sin tocar un solo flag de render**. Comparado con el preset de 16 flags
-  (+41 % FPS, §v8), esto ataca el consumo, que es lo que importa en gama baja.
-- Caso 1 (25 % / 40 W) es el objetivo cumplido para portátiles y GPUs de 75 W.
-- **Matiz:** la columna FPS es el bucle del invitado (`[FRAME]`), no la presentación. El caso 2
-  mide 35,7 FPS porque el invitado va por delante del presentador, que sí está clavado a 30.
+> **Regla para el siguiente turno:** ningún bench de este proyecto debe volver a
+> usar esperas fijas. `bench_ring.py` es el patrón a reutilizar.
 
 ---
 
-## 3. T3 — Auditoría del interlock ROV (dos premisas corregidas)
+## 2. Qué ejecuta `rexgpu-xenos` por frame (gameplay real)
 
-### 3.1 No existe `BeginInvocationInterlock` en la ruta D3D12
+Sonda: `NdRingProbe()` en `src/nd_hooks.cpp`, activa con `ND_RING=1`. Lee el
+*primary buffer* del driver D3D del invitado.
 
-```
-spirv_translator.cpp:3048      builder_->createNoResultOp(spv::OpBeginInvocationInterlockEXT);
-spirv_translator_rb.cpp:869    builder_->createNoResultOp(spv::OpBeginInvocationInterlockEXT);
+Anclaje (verificado en el código recompilado):
+
+```c
+// sub_826B5548 — asignador del primary buffer
+r11 = [dev+48];                          // puntero de escritura
+r10 = [dev+52];                          // fin del buffer
+if (r11 + n*4 > r10) sub_826B6B38(dev);  // ring lleno -> volcar/crecer
+return [dev+48];
 ```
 
-Esas son las rutas **Vulkan**. En `dxbc_translator*.cpp` **no hay ninguna llamada de
-interlock**: en D3D12 el orden de las invocaciones lo garantiza ROV por hardware, sin
-instrucción explícita. El coste por píxel no viene de un `Begin/EndInvocationInterlock`
-—que no existe— sino del **read-modify-write** que el shader hace sobre el buffer de eDRAM.
+`sub_826B8620` (Present) avanza `[dev+48]` **después** del `VdSwap`
+(`stw r11,48(r31)` con `r11 = r30+256`). Por eso, en el hook de `VdSwap`,
+`[dev+48]` marca el final exacto de los comandos del frame.
 
-### 3.2 Dónde está de verdad el coste
+### 9 ventanas en gameplay confirmado (swaps 1081–1561)
 
-`dxbc_translator_om.cpp` tiene **3081 líneas** (no ~1250; los números de la tarea están
-desfasados). Funciones relevantes:
-
-| Línea | Función |
-|---|---|
-| 25 | `StartPixelShader_LoadROVParameters` |
-| 364 | `ROV_DepthStencilTest` |
-| 1061 | `ROV_UnpackColor` — desempaqueta el color leído del buffer según `kEdramRTFormatFlags` |
-| 1204 | `ROV_PackPreClampedColor` |
-| 1372 / 1469 | `ROV_HandleColorBlendFactorCases` / `...AlphaBlendFactorCases` |
-| **1820** | **`CompletePixelShader_WriteToROV`** (~800 líneas: test de profundidad tardío, lectura de dst, blend, escritura) |
-| 1955 | `OpSwitch` sobre **`kEdramRTBlendFactorsOps`** — aquí se decide el blend por RT |
-| 2624 | `CompletePixelShader` |
-
-**No hay un `blend_enable` booleano.** El blend se resuelve con un switch de factores/ops
-por render target (`kEdramRTBlendFactorsOps`). Un fast-path de "escritura directa" tendría
-que detectar el caso *factores = One/Zero, op = Add* (blend efectivamente apagado) y saltarse
-la lectura de dst — no comprobar un flag que no existe.
-
-### 3.3 ¿Se puede recompilar `rexgpu-xenos.dll`?
-
-- `src/graphics/CMakeLists.txt:99` → `add_library(rexgpu-xenos SHARED ...)`.
-- El árbol está **configurado**: `out/build/win-amd64` con `Ninja Multi-Config` y `build.ninja`
-  que referencia el target.
-- `thirdparty/` vendorizado: `dxbc`, `dxc`, `cli11`, `crypto`, `disasm`, `disruptorplus`...
-- **Pero `find` no encuentra ninguna `rexgpu-xenos.dll` compilada**: el SDK se configuró y
-  nunca se construyó. Recompilarlo = compilar el SDK entero (core, ui, graphics, dxc) —
-  horas de build, no un `ninja` corto. **No se hizo en este turno.**
-
-**Recomendación:** si se ataca el fast-path de blend, hacerlo en una rama del SDK con build
-nocturno y validación visual en el hospital; el riesgo de romper el color es alto y el
-beneficio (evitar una lectura de 4 bytes por píxel) es menor que el que ya dio el límite de 30.
-
----
-
-## 4. T4 — Limpieza y release
-
-- **Cuarentena eliminada:** `C:\Users\katze\Downloads\_neverdead_cleanup_2026-11-02\`
-  (1,7 GB, 8.519 archivos). Espacio libre en C: **9,0 GB**.
-- **Combos en oscuro:** `DarkMode_CFD` sí funciona. El intento de v9
-  (`SetWindowTheme(h, L"", L"")`) no cambiaba nada porque desactivar el tema no oscurece
-  un `COMBOBOX`; hay que pedirle al tema oscuro nativo de Win10 1809+.
-- Captura nueva en `dist/menu_f1_alpha_preview.png` y `docs/assets/menu_f1_preview.png`
-  con "30 FPS" seleccionado y los dos combos oscuros.
-- `README.md`: sección **"Rendimiento y Referencia para PCs de Gama Baja (30 FPS por defecto)"**
-  con la tabla de §2 y la nota de que `0x82B31FBC` sigue a `0.0f`.
-- `dist/NeverDead_Recomp_v0.1.0_Alpha.zip` → **14,71 MB, 23 archivos**.
-
----
-
-## 5. Grafo
-
-| Métrica | v9 | v10 |
+| Métrica | Media | Rango |
 |---|---|---|
-| Nodos | 701 | **703** |
-| Aristas | 861 | **867** |
-| Comunidades | 35 | **34** |
-| `GRAFO_ARGON.txt` | 291 líneas | **289 líneas (34 KB)** |
+| `draws` / frame | **724,8** | 422 – 1005 |
+| `resolves` / frame | **28,9** | 16 – 44 |
+| `bin_mask` (0x50) / frame | **0** | — |
+| `bin_select` (0x51) / frame | **0** | — |
+| `pred` (type-3 con bit 0) | **1.610,7** | 799 – 2.356 |
+| `regs` escritos / frame | **154.861** | 134 k – 185 k |
+| `dwords` / frame | **243.156** (950 KB) | ~243 k |
+| `msaa` (RB_SURFACE_INFO[17:16]) | **0 (=1x)** | — |
+| `pitch` | **1120 px** (0x460) | no 1280 |
 
-Nuevos en el grafo: `NdEnsureTimerResolution()`, `NdApplyFramePacer()`, `NdApplyDarkComboTheme()`.
-`nd_hooks.cpp` es ya el nodo con más conexiones de `src/` (84).
+### Opcodes type-3 por frame (histograma de 60 frames / 60)
 
----
-
-## 6. Riesgos abiertos
-
-| # | Riesgo | Estado |
+| Opcode | Nombre | Por frame |
 |---|---|---|
-| 1 | Coste GPU por píxel en ROV | **Abierto.** Early-Z ya activo (v9); el coste es el RMW del buffer. Fast-path de blend = rebuild del SDK |
-| 2 | FPS del invitado ≠ presentación | Cosmético: `[FRAME]` mide el bucle, el pacer fija 30. Documentado en el README |
-| 3 | 30 FPS como defecto puede molestar a quien tenga GPU potente | Se cambia en el combo o con `ND_FPS_LIMIT=0` |
-| 4 | Docs sin nodos semánticos en el grafo | `uv tool install "graphifyy[anthropic]" --force` + `--update` |
-| 5 | `git push` sin hacer | `git remote add origin … && git push -u origin main` |
+| `0x22` | `PM4_DRAW_INDX` | **~502** |
+| `0x2F` | `PM4_LOAD_ALU_CONSTANT` | **~535** |
+| `0x27` | `PM4_IM_LOAD` (microcódigo de shader) | **~433** |
+| `0x2B` | — | ~33 |
+| `0x50` / `0x51` | `SET_BIN_MASK` / `SET_BIN_SELECT` | **0** |
+
+### Lectura
+
+- **Tiling descartado con prueba de runtime**, no por inferencia. Si hubiera
+  Predicated Tiling habría una máscara de bins antes de cada tile y el número de
+  draws se multiplicaría por el número de tiles. No hay ni un paquete en 540
+  frames.
+- **MSAA descartado** como causa: la superficie principal va a 1x.
+- **El cuello es de CPU**: 155 k `WriteRegister` por frame (≈5,9 M/s a 38 fps),
+  433 re-subidas de microcódigo de shader y 535 cargas de constantes. Con 725
+  draws, el driver reemite estado masivamente.
+- Los **29 resolves** sí son un coste de GPU real, pero son consecuencia de 725
+  draws con render targets intermedios, no de tiles.
 
 ---
 
-## 7. Evidencia
+## 3. `D3DDevice_BeginTiling` / `EndTiling` en `generated/`
 
-| Archivo | Contenido |
+### Estática
+
+- **0 imports** `__imp__D3DDevice_*` en todo `generated/`: el driver D3D va
+  enlazado estáticamente.
+- **No está en `export_table.inc`** de ReXGlue.
+- `tools/scan_tiling.py` recorre las 3.100+ funciones y encuentra **0**
+  cabeceras PM4 de tiling (`0xC00050xx`–`0xC00063xx`).
+- Los índices de registro llegan **por tabla en `.rdata`**, no como inmediatos:
+  por eso el escaneo estático no puede decidir solo y hace falta el runtime.
+
+### Direcciones identificadas (rango XDK D3D, 125 funciones)
+
+| Dirección | Qué es | Evidencia |
+|---|---|---|
+| `sub_826B8620` | `D3DDevice_Swap` / Present | llama `__imp__VdSwap`, `VdPersistDisplay`; avanza `[dev+48]` |
+| `sub_826B5548` | asignador del primary buffer | `[dev+48]`/`[dev+52]`, llama a `sub_826B6B38` si no cabe |
+| `sub_826B6B38` | handler de ring lleno | vuelca/crece el buffer y resetea `[dev+48]` |
+| `sub_826B75C0` | contador de anillo `(x+1) % 10` | vía `sub_826B75A8` |
+| `sub_826B7F28` | empaquetador de comandos | escribe words con tags en `r1+96` |
+
+---
+
+## 4. Directivas `*_as_local` (técnica de `pgr4-native`)
+
+`generated/neverdead_default/neverdead_init.cpp:16-25`:
+
+```cpp
+.codegen_flags = {
+    .skip_lr = false,
+    .ctr_as_local = false,
+    .xer_as_local = false,
+    .reserved_as_local = false,
+    .skip_msr = false,
+    .cr_as_local = false,
+    .non_argument_as_local = false,
+    .non_volatile_as_local = false,
+},
+```
+
+| Directiva | Estado |
 |---|---|
-| `tools/bench_gpu.py` | arnés de los 3 casos con `nvidia-smi` |
-| `dist/menu_f1_alpha_preview.png` | menú con 30 FPS y combos oscuros |
-| `docs/GRAFO_ARGON.txt` | grafo en texto (34 KB) |
-| `dist/NeverDead_Recomp_v0.1.0_Alpha.zip` | release (14,71 MB) |
-| `docs/RECAP_PARA_ARGON_2026-11-02.md` | este informe |
-| `.workbuddy-ai/memory/2026-11-02.md` | bitácora de las 6 sesiones |
+| `cr_as_local` | **false** |
+| `ctr_as_local` | **false** |
+| `xer_as_local` | **false** |
+| `non_volatile_as_local` | **false** |
+| `reserved_as_local` | **false** |
 
-**No se tocó:** `neverdead.toml`, `rexruntime.dll`, `rexgpu-xenos.dll`, `src/crash_diag.cpp`,
-`src/neverdead_app.h`, `generated/`, `assets/`.
-**Modificado:** `src/nd_hooks.cpp` (30 FPS, pacer, combos), `README.md`,
-`tools/bench_gpu.py` (nuevo), `docs/`.
+No están en `neverdead.toml` ni en el manifest: el recompilador las lee como
+claves **de primer nivel** del TOML (`src/codegen/config.cpp:105-112`, merge
+"last wins"). Para probar el 17,9 % que reporta `pgr4-native`:
+
+```toml
+# config/codegen.toml — añadir AL FINAL de includes del manifest
+cr_as_local = true
+ctr_as_local = true
+xer_as_local = true
+reserved_as_local = true
+non_volatile_as_local = true
+```
+
+Requiere **codegen completo** (3.100+ funciones) + rebuild de las 123 TUs.
+No se hizo en este turno: primero conviene tener el bench de CPU del §7.
+
+---
+
+## 5. Desfase invitado vs presentador
+
+### Por qué ocurre
+
+El único limitador es `NdApplyFramePacer()`, que corre en `NdPresentHook` (hilo
+del presentador). El invitado llama a `NdVdSwapHook()` y sigue: **no hay
+realimentación**. En gameplay su frame cuesta 26,3 ms → 38,0 fps, pero solo se
+presentan 30: **8 de cada 38 frames se sobrescriben**.
+
+### Los tres diseños probados
+
+| Configuración | Invitado | Presentador |
+|---|---|---|
+| Sin pacing del invitado (baseline) | **38,0 FPS** (26,3 ms) | **30,0 FPS** |
+| Pacing **antes** del `bl VdSwap` (contadores) | 16,8 | 11,0 ❌ |
+| Pacing **después** del `bl VdSwap`, 30,0 exacto | **30,0** (33,33 ms) | 22,0 ❌ |
+| Pacing después, +5 % headroom | 31,5 | 22,6 ❌ |
+
+- Frenar **antes** del swap crea una **dependencia circular** con el presentador
+  (Present se dispara desde el swap del invitado): solo lo rompe el timeout de
+  150 ms → 89 picos de 100 ms por ventana. **Es el mismo patrón del cuelgue de
+  `[SWAP] #3` de v4**, ahora explicado.
+- Frenar **después** sí clava el invitado en 33,33 ms (30,0 FPS, 0 picos), pero
+  el presentador cae a 22: el host presenta a su propio ritmo y, al no haber ya
+  frames de sobra, se salta despertares.
+
+### Estado entregado
+
+`NdVdSwapPostHook` (hook mid-asm en `0x826B89A4`, la instrucción siguiente al
+`bl VdSwap`) implementa pacing por tiempo, **opt-in**:
+
+```bat
+set ND_GUEST_THROTTLE=1     :: invitado a 30.0 FPS (coste: present 22)
+set ND_GUEST_HEADROOM_PCT=5 :: margen sobre el objetivo
+```
+
+Por defecto **desactivado**. `0x82B31FBC` sigue siempre a `0.0f`, así que el
+cuelgue de `[SWAP] #3` no puede reproducirse.
+
+---
+
+## 6. Grafo actualizado
+
+| | v10 | v11 |
+|---|---|---|
+| Nodos | 703 | **710** |
+| Aristas | 867 | **883** |
+| Comunidades | 34 | **34** |
+| `GRAFO_ARGON.txt` | 289 líneas | **290 líneas** (34 KB) |
+
+Recoge los símbolos nuevos: `NdRingProbe()`, `NdPaceGuestFrame()`,
+`NdVdSwapPostHook()`.
+
+**Lo que el grafo dice que sigue abierto** (comunidades `[5]` y `[8]`):
+
+- *PSO blocking compile stutter (Wait with infinite timeout in EndSubmission)*
+- *ROV overdraw saturation at 95-99 % GPU*
+- *Cuello de Botella CPU en Combate ReXGlue (80 % CPU / 48 FPS)*
+
+La tercera es exactamente lo que confirman los números del §2, y ahora tiene
+métrica: **155 k registros + 433 shaders por frame**.
+
+---
+
+## 7. Riesgos y siguiente paso
+
+| Riesgo | Estado |
+|---|---|
+| Bench midiendo menú otra vez | **Mitigado**: `bench_ring.py` valida escena por luminancia |
+| `ND_RING=1` en producción | Inocuo (solo lectura) pero cuesta CPU; no dejar activo |
+| Pacing del invitado por defecto | **No** activado: cuesta 30→22 de presentación |
+| `*_as_local` sin medir | No tocar hasta tener bench de CPU por frame |
+
+**Siguiente paso con más retorno**, por orden:
+
+1. **Instrumentar el coste de CPU por frame** (no solo FPS): tiempo en
+   `WriteRegister` vs `LoadShader` vs resto. Sin eso, optimizar es adivinar.
+2. **Atacar los 433 `PM4_IM_LOAD`**: si el juego re-sube el mismo microcódigo,
+   un caché por hash en el host lo elimina sin tocar el invitado.
+3. **`config/codegen.toml` con las 5 `*_as_local`** y A/B contra el bench nuevo.
+
+---
+
+## 8. Evidencia
+
+| Archivo | Qué contiene |
+|---|---|
+| `docs/AUDITORIA_TILING_v11.md` | Informe técnico completo de las 4 tareas |
+| `docs/assets/ring_gameplay_proof.png` | Captura del gameplay donde se midió |
+| `docs/GRAFO_ARGON.txt` | Grafo en texto (710 nodos, 290 líneas) |
+| `tools/bench_ring.py` | Arnés con detección de escena 3D |
+| `tools/scan_tiling.py` | Escáner de firmas PM4 de tiling |
+| `src/nd_hooks.cpp` | `NdRingProbe`, `NdVdSwapPostHook`, `NdPaceGuestFrame` |
+| `config/mid_asm_hooks.toml` | Hooks en `0x826B89A0` (pre) y `0x826B89A4` (post) |
+
+Commit: `c07aa8c` · 209 archivos versionados · `git status` limpio.
