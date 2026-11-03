@@ -1,0 +1,6 @@
+Pillow>=10.0.0
+# Drag and drop support for the Tk GUI
+tkinterdnd2>=0.4.2
+# Audio playback helpers used by the GUI controls
+sounddevice>=0.4.6
+numpy>=1.26.0

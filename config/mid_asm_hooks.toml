@@ -1,0 +1,45 @@
+# Mid-ASM hooks — instrumentacion nativa de ReXGlue.
+#
+# El codegen inserta una llamada C++ en la instruccion guest indicada, dentro
+# del cuerpo recompilado. No requiere editar generated/ ni redefinir simbolos
+# __imp__* (que son fuertes en rexruntime.lib y darian LNK2005).
+#
+# Direcciones verificadas con capstone sobre el XEX descifrado (offset == RVA):
+#   0x826BC3FC  bl 0x827C0084  (VdInitializeEngines), en sub_826BC390
+#   0x826B89A0  bl 0x827BFFD4  (VdSwap),              en sub_826B8620
+#
+# Las firmas de las funciones estan en src/nd_hooks.h y se fuerzan con
+# -include en CMakeLists.txt (el codegen no emite prototipos).
+
+[[midasm_hook]]
+address = 0x826BC3FC
+name = "NdVdInitHook"
+
+[[midasm_hook]]
+address = 0x826B89A0
+name = "NdVdSwapHook"
+
+# VdSetDisplayMode: r3 = puntero al X_VIDEO_MODE que el invitado fija.
+[[midasm_hook]]
+address = 0x826BC264
+name = "NdVdSetDisplayModeHook"
+registers = ["r3"]
+
+# Hook #1: Intervalo de presentacion a 1 vblank (60 Hz) en sub_826B78D8
+# Anclado de forma segura en 0x826B79D8 (justo despues de loc_826B79D4 / antes de slwi r11, r11, 8)
+[[midasm_hook]]
+address = 0x826B79D8
+name = "NdForceIntervalOneHook"
+registers = ["r11"]
+
+# Hook #2: Timeout del hilo de renderizado de Asura en sub_826BE8C0 (ajuste de 30ms a 16.6ms)
+[[midasm_hook]]
+address = 0x826BE900
+name = "NdAdjustRenderTimeoutHook"
+registers = ["r11"]
+
+# Hook #3: Tasa de simulacion del motor Asura en sub_824DADF8 (ajuste de 30.0f a 60.0f en 0x82B31FBC)
+[[midasm_hook]]
+address = 0x824DAE70
+name = "NdSetFpsLimitHook"
+registers = ["f0"]

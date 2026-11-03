@@ -1,0 +1,89 @@
+# =============================================================================
+# M2 / W3 -- CRT NATIVO de ReXGlue via la tabla [rexcrt]
+# =============================================================================
+# Que hace [rexcrt]:
+#   Cada entrada  Nombre = 0xVA  dice: "la funcion del invitado en esa VA
+#   implementa la funcion de CRT `Nombre`".  El codegen de ReXGlue:
+#     1) renombra esa funcion a `rexcrt_<Nombre>`,
+#     2) la EXCLUYE de la recompilacion, y
+#     3) la llamada se resuelve con la implementacion NATIVA que exporta
+#        rexruntime.dll (`rexcrt_<Nombre>`).
+#   Formato: `Nombre = 0x...` (entero hexadecimal TOML, SIN comillas).
+#
+# ABI (verificada en los bytes de rexruntime.dll):
+#   La funcion nativa tiene la MISMA firma que una funcion recompilada del
+#   invitado:  void rexcrt_<Nombre>(PPCContext& ctx, uint8_t* base)
+#   y lee los argumentos del contexto en las posiciones del PPC de PowerPC:
+#       ctx->r3 = [ctx+0x00]      ctx->r4 = [ctx+0x20]
+#       ctx->r5 = [ctx+0x28]      ctx->r6 = [ctx+0x30]
+#   El resultado se escribe de vuelta en ctx->r3.
+#   => una entrada [rexcrt] SOLO es valida si la funcion del invitado en esa VA
+#      usa EXACTAMENTE esos registros con esos meanings.
+#
+# Exportaciones disponibles en rexruntime.dll (tabla de exports del PE,
+# 66 simbolos `rexcrt_*`; el grupo heap son exactamente 4):
+#   rexcrt_RtlAllocateHeap rexcrt_RtlFreeHeap rexcrt_RtlSizeHeap
+#   rexcrt_RtlReAllocateHeap
+#   rexcrt_memcpy rexcrt_memmove rexcrt_memcpy_s rexcrt_memmove_s rexcrt_memset
+#   rexcrt_memchr rexcrt_memset_vmx rexcrt_XMemCpy rexcrt_XMemSet rexcrt_XMemSet128
+#   rexcrt_strchr rexcrt_strrchr rexcrt_strstr rexcrt_strncmp rexcrt_strncpy
+#   rexcrt_strcpy_s rexcrt_strtok rexcrt__stricmp rexcrt_lstrcatA rexcrt_lstrcmpiA
+#   rexcrt_lstrcpyA rexcrt_lstrcpynA rexcrt_lstrlenA rexcrt_wcschr rexcrt_wcscmp
+#   rexcrt_wcscoll rexcrt_wcscpy rexcrt_wcslen rexcrt_wcsncmp rexcrt_wcsncpy
+#   rexcrt_wcsncpy_s rexcrt_wcsrchr rexcrt_wcsstr
+#   rexcrt_CreateFileA rexcrt_ReadFile rexcrt_WriteFile rexcrt_CloseHandle ... etc.
+#   NO existe rexcrt_strcat_s, rexcrt_strlen, rexcrt_mbstowcs  => esas NO se mapean.
+#
+# -----------------------------------------------------------------------------
+# GRUPO HEAP: NO DECLARADO (y por tanto NO se puede mapear en absoluto)
+# -----------------------------------------------------------------------------
+# El grupo `rexcrt_heap` es TODO-O-NADA: el codegen rechaza el config con
+#   "[rexcrt] heap group is incomplete (N/4 specified), missing: {...}"
+# si faltan RtlSizeHeap / RtlAllocateHeap / RtlReAllocateHeap / RtlFreeHeap.
+#
+# Direcciones del invitado PROBADAS con Capstone (ABI NT Rtl*Heap):
+#   RtlAllocateHeap   = 0x826DF9B8  (heap=r3, flags=r4, size=r5) -> ptr en r3
+#   RtlFreeHeap       = 0x826E02B0  (heap=r3, flags=r4, ptr=r5)   -> BOOL en r3
+#   RtlReAllocateHeap = 0x826E05A8  (heap=r3, flags=r4, ptr=r5, newsize=r6)
+#   RtlSizeHeap       = ???         <-- NO PROBADA (ver handoff_w3.md)
+#
+# Las nativas del runtime leen:
+#   RtlAllocateHeap   -> ctx->r4 (flags, bit 8 = HEAP_ZERO_MEMORY) y ctx->r5 (size)
+#   RtlFreeHeap       -> ctx->r5 (ptr)
+#   RtlSizeHeap       -> ctx->r5 (ptr)   [o1heapGetSize]
+#   RtlReAllocateHeap -> ctx->r4 (flags), ctx->r5 (ptr viejo), ctx->r6 (size nuevo)
+#
+# RtlSizeHeap exige una funcion del invitado con (r3=heap, r4=flags, r5=ptr) que
+# devuelva el tamano del bloque.  En el motor no existe ninguna con esa forma:
+# las rutas de "size" toman el puntero en r4 (0x826DE170, 0x826E1128) o tienen
+# 5 argumentos (0x826DE6B0) o son envoltorios de despacho por "kind"
+# (0x826DCEB8, que devuelve un descriptor, no un tamano).  Mapear cualquiera de
+# ellas seria inventar semantica, asi que el grupo heap NO se declara.
+#
+# Las direcciones que la consigna proponia para el heap estan DESCARTADAS con
+# bytes (ver handoff_w3.md, seccion 1):
+#   0x82788B38 y 0x82788B90 NO son entradas de funcion: son etiquetas
+#   interiores de 0x827889E8..0x82788B90 (rango .pdata del CRT).
+#   0x82788B20 (malloc) y 0x82788A40 (free) son de 1 argumento, y las nativas
+#   Rtl*Heap del runtime leen r4/r5 => ABI INCOMPATIBLE.
+#
+# -----------------------------------------------------------------------------
+# MAPEO DECLARADO (minimo y probado)
+# -----------------------------------------------------------------------------
+# memcpy  0x8278AE60 : dst=r3, src=r4, n=r5.  Guardado de r3 + copia por
+#   bloques; el final del bloque esta en 0x8278AEB0..0x8278B1D8 (lacola
+#   desalineada en 0x8278AEEC es una ETIQUETA INTERIOR, no otra funcion).
+# memset  0x8278ADC0 : dst=r3, val=r4, n=r5 (stb r4,0(r6) en bucle).
+# strchr  0x82788D90 : s=r3, c=r4 (lbz r6,0(r3); cmpw r6,r4).
+# strncpy 0x82788970 : dst=r3, src=r4, n=r5 (subf r10,r3,r4; lbzx r9,r10,r11).
+#
+# Las 4 tienen entrada real en el arbol generado (DECLARE_REX_FUNC) y la
+# traduccion de direcciones de las nativas del runtime usa exactamente la misma
+# convencion que el codegen (REX_PHYS_HOST_OFFSET: +0x1000 si addr>=0xE0000000).
+# -----------------------------------------------------------------------------
+
+[rexcrt]
+memcpy = 0x8278AE60
+memset = 0x8278ADC0
+strchr = 0x82788D90
+strncpy = 0x82788970

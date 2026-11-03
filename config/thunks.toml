@@ -1,0 +1,762 @@
+# Thunks hoja que NO estan en .pdata (clase: llamada virtual).
+#
+# Generado por tools/scan_vcall_thunks.py a partir de la imagen descifrada.
+# Patron: lwz r11,0(r3); lwz r10,OFF(r11); mtctr r10; bctr  (16 bytes).
+# El codegen solo conoce entradas .pdata; sin estas entradas el dispatcher
+# lanza FATAL 'Call to invalid or unregistered function'.
+#
+# Se declaran como CHUNK con parent = inicio .pdata contenedor para no violar
+# la regla de no-solapamiento de funciones standalone.
+
+[functions."0x82438D70"]
+size = 0x10
+name = "nd_vcall_82438D70"
+
+# 0x823529E8: lis r11,0x8288; addi r3,r11,0x6244; b 0x821B2C70
+# Tail-call thunk tras el blr de 0x82352898. Se declara como chunk del padre
+# (no standalone) para no partir el flujo interno de la funcion contenedora.
+[functions."0x823529E8"]
+size = 0x0C
+name = "nd_tail_823529E8"
+
+# 0x823529F8: lis r11,0x8288; mr r4,r3; addi r3,r11,0x6244; b ...
+# Segundo thunk de la misma tabla (16 bytes). El primero termina en 0x823529F4.
+[functions."0x823529F8"]
+size = 0x10
+name = "nd_tail_823529F8"
+
+[functions."0x821B3A38"]
+parent = 2182822184   # 0x821B3928
+end = 2182822472      # 0x821B3A48
+name = "nd_vcall_821B3A38"
+
+[functions."0x821CBC18"]
+parent = 2182920768   # 0x821CBA40
+end = 2182921256      # 0x821CBC28
+name = "nd_vcall_821CBC18"
+
+[functions."0x821CBC50"]
+parent = 2182920768   # 0x821CBA40
+end = 2182921312      # 0x821CBC60
+name = "nd_vcall_821CBC50"
+
+[functions."0x821CBD08"]
+parent = 2182920768   # 0x821CBA40
+end = 2182921496      # 0x821CBD18
+name = "nd_vcall_821CBD08"
+
+[functions."0x821CBD40"]
+parent = 2182920768   # 0x821CBA40
+end = 2182921552      # 0x821CBD50
+name = "nd_vcall_821CBD40"
+
+[functions."0x821CF5E4"]
+parent = 2182935720   # 0x821CF4A8
+end = 2182936052      # 0x821CF5F4
+name = "nd_vcall_821CF5E4"
+
+[functions."0x821CF61C"]
+parent = 2182935720   # 0x821CF4A8
+end = 2182936108      # 0x821CF62C
+name = "nd_vcall_821CF61C"
+
+[functions."0x82200164"]
+parent = 2183135488   # 0x82200100
+end = 2183135604      # 0x82200174
+name = "nd_vcall_82200164"
+
+[functions."0x8220029C"]
+parent = 2183135752   # 0x82200208
+end = 2183135916      # 0x822002AC
+name = "nd_vcall_8220029C"
+
+[functions."0x8220E8B4"]
+parent = 2183194568   # 0x8220E7C8
+end = 2183194820      # 0x8220E8C4
+name = "nd_vcall_8220E8B4"
+
+[functions."0x82232370"]
+parent = 2183340408   # 0x82232178
+end = 2183340928      # 0x82232380
+name = "nd_vcall_82232370"
+
+[functions."0x82234D3C"]
+parent = 2183351280   # 0x82234BF0
+end = 2183351628      # 0x82234D4C
+name = "nd_vcall_82234D3C"
+
+[functions."0x822449D0"]
+parent = 2183415904   # 0x82244860
+end = 2183416288      # 0x822449E0
+name = "nd_vcall_822449D0"
+
+[functions."0x82244A10"]
+parent = 2183415904   # 0x82244860
+end = 2183416352      # 0x82244A20
+name = "nd_vcall_82244A10"
+
+[functions."0x82250984"]
+parent = 2183465200   # 0x822508F0
+end = 2183465364      # 0x82250994
+name = "nd_vcall_82250984"
+
+[functions."0x8225737C"]
+parent = 2183492224   # 0x82257280
+end = 2183492492      # 0x8225738C
+name = "nd_vcall_8225737C"
+
+[functions."0x8225F708"]
+parent = 2183525472   # 0x8225F460
+end = 2183526168      # 0x8225F718
+name = "nd_vcall_8225F708"
+
+[functions."0x8229433C"]
+parent = 2183741032   # 0x82293E68
+end = 2183742284      # 0x8229434C
+name = "nd_vcall_8229433C"
+
+[functions."0x82299E38"]
+parent = 2183765416   # 0x82299DA8
+end = 2183765576      # 0x82299E48
+name = "nd_vcall_82299E38"
+
+[functions."0x82299E58"]
+parent = 2183765416   # 0x82299DA8
+end = 2183765608      # 0x82299E68
+name = "nd_vcall_82299E58"
+
+[functions."0x82299EE0"]
+parent = 2183765616   # 0x82299E70
+end = 2183765744      # 0x82299EF0
+name = "nd_vcall_82299EE0"
+
+[functions."0x82299F08"]
+parent = 2183765616   # 0x82299E70
+end = 2183765784      # 0x82299F18
+name = "nd_vcall_82299F08"
+
+[functions."0x82299F30"]
+parent = 2183765616   # 0x82299E70
+end = 2183765824      # 0x82299F40
+name = "nd_vcall_82299F30"
+
+[functions."0x82299F58"]
+parent = 2183765616   # 0x82299E70
+end = 2183765864      # 0x82299F68
+name = "nd_vcall_82299F58"
+
+[functions."0x8229D714"]
+parent = 2183779944   # 0x8229D668
+end = 2183780132      # 0x8229D724
+name = "nd_vcall_8229D714"
+
+[functions."0x822A0CA0"]
+parent = 2183793432   # 0x822A0B18
+end = 2183793840      # 0x822A0CB0
+name = "nd_vcall_822A0CA0"
+
+[functions."0x822A0CC8"]
+parent = 2183793432   # 0x822A0B18
+end = 2183793880      # 0x822A0CD8
+name = "nd_vcall_822A0CC8"
+
+[functions."0x822A0CF0"]
+parent = 2183793432   # 0x822A0B18
+end = 2183793920      # 0x822A0D00
+name = "nd_vcall_822A0CF0"
+
+[functions."0x822A0D24"]
+parent = 2183793432   # 0x822A0B18
+end = 2183793972      # 0x822A0D34
+name = "nd_vcall_822A0D24"
+
+[functions."0x822A0D70"]
+parent = 2183793432   # 0x822A0B18
+end = 2183794048      # 0x822A0D80
+name = "nd_vcall_822A0D70"
+
+[functions."0x822C29EC"]
+parent = 2183932304   # 0x822C2990
+end = 2183932412      # 0x822C29FC
+name = "nd_vcall_822C29EC"
+
+[functions."0x822CC3E0"]
+parent = 2183971496   # 0x822CC2A8
+end = 2183971824      # 0x822CC3F0
+name = "nd_vcall_822CC3E0"
+
+[functions."0x822CC828"]
+parent = 2183972744   # 0x822CC788
+end = 2183972920      # 0x822CC838
+name = "nd_vcall_822CC828"
+
+[functions."0x82330E88"]
+parent = 2184383936   # 0x82330DC0
+end = 2184384152      # 0x82330E98
+name = "nd_vcall_82330E88"
+
+[functions."0x82330E98"]
+parent = 2184383936   # 0x82330DC0
+end = 2184384168      # 0x82330EA8
+name = "nd_vcall_82330E98"
+
+[functions."0x82336204"]
+parent = 2184405352   # 0x82336168
+end = 2184405524      # 0x82336214
+name = "nd_vcall_82336204"
+
+[functions."0x8234CF10"]
+parent = 2184498624   # 0x8234CDC0
+end = 2184498976      # 0x8234CF20
+name = "nd_vcall_8234CF10"
+
+[functions."0x82352D40"]
+parent = 2184522720   # 0x82352BE0
+end = 2184523088      # 0x82352D50
+name = "nd_vcall_82352D40"
+
+[functions."0x82352E68"]
+parent = 2184523096   # 0x82352D58
+end = 2184523384      # 0x82352E78
+name = "nd_vcall_82352E68"
+
+[functions."0x82352E90"]
+parent = 2184523096   # 0x82352D58
+end = 2184523424      # 0x82352EA0
+name = "nd_vcall_82352E90"
+
+[functions."0x823761A4"]
+parent = 2184667136   # 0x82376000
+end = 2184667572      # 0x823761B4
+name = "nd_vcall_823761A4"
+
+[functions."0x823873E0"]
+parent = 2184737600   # 0x82387340
+end = 2184737776      # 0x823873F0
+name = "nd_vcall_823873E0"
+
+[functions."0x823873F0"]
+parent = 2184737600   # 0x82387340
+end = 2184737792      # 0x82387400
+name = "nd_vcall_823873F0"
+
+[functions."0x82392EEC"]
+parent = 2184785400   # 0x82392DF8
+end = 2184785660      # 0x82392EFC
+name = "nd_vcall_82392EEC"
+
+[functions."0x82392F54"]
+parent = 2184785400   # 0x82392DF8
+end = 2184785764      # 0x82392F64
+name = "nd_vcall_82392F54"
+
+[functions."0x82395718"]
+parent = 2184795744   # 0x82395660
+end = 2184795944      # 0x82395728
+name = "nd_vcall_82395718"
+
+[functions."0x823A55B4"]
+parent = 2184860816   # 0x823A5490
+end = 2184861124      # 0x823A55C4
+name = "nd_vcall_823A55B4"
+
+[functions."0x823A958C"]
+parent = 2184877368   # 0x823A9538
+end = 2184877468      # 0x823A959C
+name = "nd_vcall_823A958C"
+
+[functions."0x823C1F98"]
+parent = 2184978264   # 0x823C1F58
+end = 2184978344      # 0x823C1FA8
+name = "nd_vcall_823C1F98"
+
+[functions."0x8242C888"]
+parent = 2185414528   # 0x8242C780
+end = 2185414808      # 0x8242C898
+name = "nd_vcall_8242C888"
+
+[functions."0x8243A51C"]
+parent = 2185471008   # 0x8243A420
+end = 2185471276      # 0x8243A52C
+name = "nd_vcall_8243A51C"
+
+[functions."0x8243A534"]
+parent = 2185471008   # 0x8243A420
+end = 2185471300      # 0x8243A544
+name = "nd_vcall_8243A534"
+
+[functions."0x8243A54C"]
+parent = 2185471008   # 0x8243A420
+end = 2185471324      # 0x8243A55C
+name = "nd_vcall_8243A54C"
+
+[functions."0x8243A5DC"]
+parent = 2185471328   # 0x8243A560
+end = 2185471468      # 0x8243A5EC
+name = "nd_vcall_8243A5DC"
+
+[functions."0x8243A7CC"]
+parent = 2185471584   # 0x8243A660
+end = 2185471964      # 0x8243A7DC
+name = "nd_vcall_8243A7CC"
+
+[functions."0x8243A90C"]
+parent = 2185472144   # 0x8243A890
+end = 2185472284      # 0x8243A91C
+name = "nd_vcall_8243A90C"
+
+[functions."0x8243A924"]
+parent = 2185472144   # 0x8243A890
+end = 2185472308      # 0x8243A934
+name = "nd_vcall_8243A924"
+
+[functions."0x8243A93C"]
+parent = 2185472144   # 0x8243A890
+end = 2185472332      # 0x8243A94C
+name = "nd_vcall_8243A93C"
+
+[functions."0x8243A954"]
+parent = 2185472144   # 0x8243A890
+end = 2185472356      # 0x8243A964
+name = "nd_vcall_8243A954"
+
+[functions."0x8243A96C"]
+parent = 2185472144   # 0x8243A890
+end = 2185472380      # 0x8243A97C
+name = "nd_vcall_8243A96C"
+
+[functions."0x8243A984"]
+parent = 2185472144   # 0x8243A890
+end = 2185472404      # 0x8243A994
+name = "nd_vcall_8243A984"
+
+[functions."0x8243A99C"]
+parent = 2185472144   # 0x8243A890
+end = 2185472428      # 0x8243A9AC
+name = "nd_vcall_8243A99C"
+
+[functions."0x8243A9B4"]
+parent = 2185472144   # 0x8243A890
+end = 2185472452      # 0x8243A9C4
+name = "nd_vcall_8243A9B4"
+
+[functions."0x8243A9CC"]
+parent = 2185472144   # 0x8243A890
+end = 2185472476      # 0x8243A9DC
+name = "nd_vcall_8243A9CC"
+
+[functions."0x8243A9E4"]
+parent = 2185472144   # 0x8243A890
+end = 2185472500      # 0x8243A9F4
+name = "nd_vcall_8243A9E4"
+
+[functions."0x8243DB7C"]
+parent = 2185484968   # 0x8243DAA8
+end = 2185485196      # 0x8243DB8C
+name = "nd_vcall_8243DB7C"
+
+[functions."0x8243E438"]
+parent = 2185487216   # 0x8243E370
+end = 2185487432      # 0x8243E448
+name = "nd_vcall_8243E438"
+
+[functions."0x8243E460"]
+parent = 2185487216   # 0x8243E370
+end = 2185487472      # 0x8243E470
+name = "nd_vcall_8243E460"
+
+[functions."0x8243E7A0"]
+parent = 2185488024   # 0x8243E698
+end = 2185488304      # 0x8243E7B0
+name = "nd_vcall_8243E7A0"
+
+[functions."0x8244A954"]
+parent = 2185537736   # 0x8244A8C8
+end = 2185537892      # 0x8244A964
+name = "nd_vcall_8244A954"
+
+[functions."0x82471CFC"]
+parent = 2185698320   # 0x82471C10
+end = 2185698572      # 0x82471D0C
+name = "nd_vcall_82471CFC"
+
+[functions."0x8249CEA0"]
+parent = 2185874184   # 0x8249CB08
+end = 2185875120      # 0x8249CEB0
+name = "nd_vcall_8249CEA0"
+
+[functions."0x824A1B88"]
+parent = 2185894632   # 0x824A1AE8
+end = 2185894808      # 0x824A1B98
+name = "nd_vcall_824A1B88"
+
+[functions."0x824A1C28"]
+parent = 2185894816   # 0x824A1BA0
+end = 2185894968      # 0x824A1C38
+name = "nd_vcall_824A1C28"
+
+[functions."0x824C2D34"]
+parent = 2186029240   # 0x824C28B8
+end = 2186030404      # 0x824C2D44
+name = "nd_vcall_824C2D34"
+
+[functions."0x824C2D4C"]
+parent = 2186029240   # 0x824C28B8
+end = 2186030428      # 0x824C2D5C
+name = "nd_vcall_824C2D4C"
+
+[functions."0x824C5BD8"]
+parent = 2186041720   # 0x824C5978
+end = 2186042344      # 0x824C5BE8
+name = "nd_vcall_824C5BD8"
+
+[functions."0x824C8DF8"]
+parent = 2186054824   # 0x824C8CA8
+end = 2186055176      # 0x824C8E08
+name = "nd_vcall_824C8DF8"
+
+[functions."0x824D2D70"]
+parent = 2186095848   # 0x824D2CE8
+end = 2186096000      # 0x824D2D80
+name = "nd_vcall_824D2D70"
+
+[functions."0x824F321C"]
+parent = 2186227952   # 0x824F30F0
+end = 2186228268      # 0x824F322C
+name = "nd_vcall_824F321C"
+
+[functions."0x824F3E60"]
+parent = 2186231104   # 0x824F3D40
+end = 2186231408      # 0x824F3E70
+name = "nd_vcall_824F3E60"
+
+[functions."0x824F4164"]
+parent = 2186231416   # 0x824F3E78
+end = 2186232180      # 0x824F4174
+name = "nd_vcall_824F4164"
+
+[functions."0x824F417C"]
+parent = 2186231416   # 0x824F3E78
+end = 2186232204      # 0x824F418C
+name = "nd_vcall_824F417C"
+
+[functions."0x824F4194"]
+parent = 2186231416   # 0x824F3E78
+end = 2186232228      # 0x824F41A4
+name = "nd_vcall_824F4194"
+
+[functions."0x824F41AC"]
+parent = 2186231416   # 0x824F3E78
+end = 2186232252      # 0x824F41BC
+name = "nd_vcall_824F41AC"
+
+[functions."0x824F7E08"]
+parent = 2186247368   # 0x824F7CC8
+end = 2186247704      # 0x824F7E18
+name = "nd_vcall_824F7E08"
+
+[functions."0x824F7F74"]
+parent = 2186247368   # 0x824F7CC8
+end = 2186248068      # 0x824F7F84
+name = "nd_vcall_824F7F74"
+
+[functions."0x824F7F8C"]
+parent = 2186247368   # 0x824F7CC8
+end = 2186248092      # 0x824F7F9C
+name = "nd_vcall_824F7F8C"
+
+[functions."0x824F7FA4"]
+parent = 2186247368   # 0x824F7CC8
+end = 2186248116      # 0x824F7FB4
+name = "nd_vcall_824F7FA4"
+
+[functions."0x824F7FBC"]
+parent = 2186247368   # 0x824F7CC8
+end = 2186248140      # 0x824F7FCC
+name = "nd_vcall_824F7FBC"
+
+[functions."0x824F800C"]
+parent = 2186247368   # 0x824F7CC8
+end = 2186248220      # 0x824F801C
+name = "nd_vcall_824F800C"
+
+[functions."0x824F8024"]
+parent = 2186247368   # 0x824F7CC8
+end = 2186248244      # 0x824F8034
+name = "nd_vcall_824F8024"
+
+[functions."0x824FC51C"]
+parent = 2186265648   # 0x824FC430
+end = 2186265900      # 0x824FC52C
+name = "nd_vcall_824FC51C"
+
+[functions."0x824FC69C"]
+parent = 2186266056   # 0x824FC5C8
+end = 2186266284      # 0x824FC6AC
+name = "nd_vcall_824FC69C"
+
+[functions."0x824FC6B4"]
+parent = 2186266056   # 0x824FC5C8
+end = 2186266308      # 0x824FC6C4
+name = "nd_vcall_824FC6B4"
+
+[functions."0x824FC88C"]
+parent = 2186266416   # 0x824FC730
+end = 2186266780      # 0x824FC89C
+name = "nd_vcall_824FC88C"
+
+[functions."0x824FC8F4"]
+parent = 2186266416   # 0x824FC730
+end = 2186266884      # 0x824FC904
+name = "nd_vcall_824FC8F4"
+
+[functions."0x824FC9AC"]
+parent = 2186266904   # 0x824FC918
+end = 2186267068      # 0x824FC9BC
+name = "nd_vcall_824FC9AC"
+
+[functions."0x82501FE4"]
+parent = 2186288920   # 0x82501F18
+end = 2186289140      # 0x82501FF4
+name = "nd_vcall_82501FE4"
+
+[functions."0x82501FFC"]
+parent = 2186288920   # 0x82501F18
+end = 2186289164      # 0x8250200C
+name = "nd_vcall_82501FFC"
+
+[functions."0x8250201C"]
+parent = 2186288920   # 0x82501F18
+end = 2186289196      # 0x8250202C
+name = "nd_vcall_8250201C"
+
+[functions."0x82502034"]
+parent = 2186288920   # 0x82501F18
+end = 2186289220      # 0x82502044
+name = "nd_vcall_82502034"
+
+[functions."0x8250204C"]
+parent = 2186288920   # 0x82501F18
+end = 2186289244      # 0x8250205C
+name = "nd_vcall_8250204C"
+
+[functions."0x82502064"]
+parent = 2186288920   # 0x82501F18
+end = 2186289268      # 0x82502074
+name = "nd_vcall_82502064"
+
+[functions."0x8250207C"]
+parent = 2186288920   # 0x82501F18
+end = 2186289292      # 0x8250208C
+name = "nd_vcall_8250207C"
+
+[functions."0x82502104"]
+parent = 2186288920   # 0x82501F18
+end = 2186289428      # 0x82502114
+name = "nd_vcall_82502104"
+
+[functions."0x8250211C"]
+parent = 2186288920   # 0x82501F18
+end = 2186289452      # 0x8250212C
+name = "nd_vcall_8250211C"
+
+[functions."0x82502134"]
+parent = 2186288920   # 0x82501F18
+end = 2186289476      # 0x82502144
+name = "nd_vcall_82502134"
+
+[functions."0x8250214C"]
+parent = 2186288920   # 0x82501F18
+end = 2186289500      # 0x8250215C
+name = "nd_vcall_8250214C"
+
+[functions."0x82502164"]
+parent = 2186288920   # 0x82501F18
+end = 2186289524      # 0x82502174
+name = "nd_vcall_82502164"
+
+[functions."0x8250217C"]
+parent = 2186288920   # 0x82501F18
+end = 2186289548      # 0x8250218C
+name = "nd_vcall_8250217C"
+
+[functions."0x82502194"]
+parent = 2186288920   # 0x82501F18
+end = 2186289572      # 0x825021A4
+name = "nd_vcall_82502194"
+
+[functions."0x825021AC"]
+parent = 2186288920   # 0x82501F18
+end = 2186289596      # 0x825021BC
+name = "nd_vcall_825021AC"
+
+[functions."0x825021C4"]
+parent = 2186288920   # 0x82501F18
+end = 2186289620      # 0x825021D4
+name = "nd_vcall_825021C4"
+
+[functions."0x82502204"]
+parent = 2186288920   # 0x82501F18
+end = 2186289684      # 0x82502214
+name = "nd_vcall_82502204"
+
+[functions."0x8250221C"]
+parent = 2186288920   # 0x82501F18
+end = 2186289708      # 0x8250222C
+name = "nd_vcall_8250221C"
+
+[functions."0x82502234"]
+parent = 2186288920   # 0x82501F18
+end = 2186289732      # 0x82502244
+name = "nd_vcall_82502234"
+
+[functions."0x825025CC"]
+parent = 2186290448   # 0x82502510
+end = 2186290652      # 0x825025DC
+name = "nd_vcall_825025CC"
+
+[functions."0x82504004"]
+parent = 2186296976   # 0x82503E90
+end = 2186297364      # 0x82504014
+name = "nd_vcall_82504004"
+
+[functions."0x8250420C"]
+parent = 2186297728   # 0x82504180
+end = 2186297884      # 0x8250421C
+name = "nd_vcall_8250420C"
+
+[functions."0x8250B010"]
+parent = 2186324040   # 0x8250A848
+end = 2186326048      # 0x8250B020
+name = "nd_vcall_8250B010"
+
+[functions."0x8250B160"]
+parent = 2186326056   # 0x8250B028
+end = 2186326384      # 0x8250B170
+name = "nd_vcall_8250B160"
+
+[functions."0x8251B04C"]
+parent = 2186391328   # 0x8251AF20
+end = 2186391644      # 0x8251B05C
+name = "nd_vcall_8251B04C"
+
+[functions."0x8252465C"]
+parent = 2186429816   # 0x82524578
+end = 2186430060      # 0x8252466C
+name = "nd_vcall_8252465C"
+
+[functions."0x825723E8"]
+parent = 2186748600   # 0x825722B8
+end = 2186748920      # 0x825723F8
+name = "nd_vcall_825723E8"
+
+[functions."0x825C7FB4"]
+parent = 2187099616   # 0x825C7DE0
+end = 2187100100      # 0x825C7FC4
+name = "nd_vcall_825C7FB4"
+
+[functions."0x825E0324"]
+parent = 2187199176   # 0x825E02C8
+end = 2187199284      # 0x825E0334
+name = "nd_vcall_825E0324"
+
+[functions."0x825E0480"]
+parent = 2187199496   # 0x825E0408
+end = 2187199632      # 0x825E0490
+name = "nd_vcall_825E0480"
+
+[functions."0x825E0498"]
+parent = 2187199496   # 0x825E0408
+end = 2187199656      # 0x825E04A8
+name = "nd_vcall_825E0498"
+
+[functions."0x825E04B0"]
+parent = 2187199496   # 0x825E0408
+end = 2187199680      # 0x825E04C0
+name = "nd_vcall_825E04B0"
+
+[functions."0x825E04C8"]
+parent = 2187199496   # 0x825E0408
+end = 2187199704      # 0x825E04D8
+name = "nd_vcall_825E04C8"
+
+[functions."0x825E04E0"]
+parent = 2187199496   # 0x825E0408
+end = 2187199728      # 0x825E04F0
+name = "nd_vcall_825E04E0"
+
+[functions."0x825E04F8"]
+parent = 2187199496   # 0x825E0408
+end = 2187199752      # 0x825E0508
+name = "nd_vcall_825E04F8"
+
+[functions."0x825E0510"]
+parent = 2187199496   # 0x825E0408
+end = 2187199776      # 0x825E0520
+name = "nd_vcall_825E0510"
+
+[functions."0x825E0528"]
+parent = 2187199496   # 0x825E0408
+end = 2187199800      # 0x825E0538
+name = "nd_vcall_825E0528"
+
+[functions."0x825E0540"]
+parent = 2187199496   # 0x825E0408
+end = 2187199824      # 0x825E0550
+name = "nd_vcall_825E0540"
+
+[functions."0x825E0558"]
+parent = 2187199496   # 0x825E0408
+end = 2187199848      # 0x825E0568
+name = "nd_vcall_825E0558"
+
+[functions."0x825E05D0"]
+parent = 2187199848   # 0x825E0568
+end = 2187199968      # 0x825E05E0
+name = "nd_vcall_825E05D0"
+
+[functions."0x825E05E8"]
+parent = 2187199848   # 0x825E0568
+end = 2187199992      # 0x825E05F8
+name = "nd_vcall_825E05E8"
+
+[functions."0x825E0600"]
+parent = 2187199848   # 0x825E0568
+end = 2187200016      # 0x825E0610
+name = "nd_vcall_825E0600"
+
+[functions."0x825F585C"]
+parent = 2187286488   # 0x825F57D8
+end = 2187286636      # 0x825F586C
+name = "nd_vcall_825F585C"
+
+[functions."0x82634098"]
+parent = 2187542456   # 0x82633FB8
+end = 2187542696      # 0x826340A8
+name = "nd_vcall_82634098"
+
+[functions."0x82640BC8"]
+parent = 2187594320   # 0x82640A50
+end = 2187594712      # 0x82640BD8
+name = "nd_vcall_82640BC8"
+
+[functions."0x82648B2C"]
+parent = 2187627048   # 0x82648A28
+end = 2187627324      # 0x82648B3C
+name = "nd_vcall_82648B2C"
+
+[functions."0x8266AF48"]
+parent = 2187767264   # 0x8266ADE0
+end = 2187767640      # 0x8266AF58
+name = "nd_vcall_8266AF48"
+
+[functions."0x8269929C"]
+parent = 2187956496   # 0x82699110
+end = 2187956908      # 0x826992AC
+name = "nd_vcall_8269929C"
+
+[functions."0x8269A9C4"]
+parent = 2187962248   # 0x8269A788
+end = 2187962836      # 0x8269A9D4
+name = "nd_vcall_8269A9C4"
+

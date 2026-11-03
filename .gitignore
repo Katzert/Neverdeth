@@ -1,0 +1,33 @@
+# NeverDead PC Recompilation (ReXGlue) — Alpha
+/assets/
+/FMV
+/Fonts
+/GUIMenu
+/Text
+/misc
+/sounds
+/NeverDead_base.bin
+/build_clang/
+/cache/
+/dist/
+/generated/
+/graphify-out/
+/.workbuddy-ai/
+/.agents/
+/.freebuff/
+/.tgrep-index/
+/__pycache__/
+*.log
+*.bmp
+*.png
+*.dmp
+*.exe
+*.dll
+*.pdb
+*.obj
+
+# --- Branding versionado (excepciones a *.png / *.bmp de arriba) ---
+!docs/assets/*.png
+!docs/assets/*.bmp
+!config/*.ico
+!config/*.bmp

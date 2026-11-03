@@ -1,0 +1,1812 @@
+// NeverDead — instrumentacion de los imports de video por mid-ASM hooks.
+//
+// Por que aqui y no en nd_import_diag.h:
+//   El codigo generado llama directamente a `__imp__VdSwap(ctx, base)`; el
+//   simbolo `__imp__*` es FUERTE en rexruntime.lib, asi que redefinirlo da
+//   LNK2005. Los hooks por direccion (0x827BExxx) tampoco sirven: el arbol
+//   registra los stubs en 0x827C0xxx (desfase -0x2000) y el generado no llama
+//   a esos simbolos.
+//
+// Mecanismo nativo: [[midasm_hook]] inyecta una llamada en la instruccion
+// exacta. Aqui se enganchan los dos unicos `bl` del invitado:
+//   0x826BC3FC -> bl VdInitializeEngines (stub 0x827C0084)
+//   0x826B89A0 -> bl VdSwap              (stub 0x827BFFD4)
+// Verificado con capstone sobre el XEX descifrado (imagen offset == RVA).
+#include "nd_hooks.h"
+#ifdef _WIN32
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <windows.h>
+#include <tlhelp32.h>
+// La puerta de Present se instala sobre la vtable de IDXGISwapChain, no sobre
+// un call-site adivinado de rexruntime.dll (ver NdInstallPresentGate).
+#include <dxgi.h>
+#include <dxgi1_2.h>
+#endif
+#include <algorithm>
+#include <atomic>
+#include <chrono>
+#include <cstdint>
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
+#include <mutex>
+#include <utility>
+#include <string>
+#include <thread>
+#include <vector>
+#include <rex/logging.h>
+namespace {
+std::atomic<uint64_t> g_vd_init_calls{0};
+std::atomic<uint64_t> g_vd_swap_calls{0};
+std::atomic<uint64_t> g_last_presented_swap{0};
+// Puntero al rex::ui::Presenter, capturado en SetPaintModeFromUIThread (RCX).
+// Solo se usa para leer paint_mode_ (offset 0xA8, verificado desensamblando
+// rexruntime.dll: `cmp dword [rcx+0xA8], 2` en 0xD69C5 y
+// `mov dword [rsi+0xA8], edi` en 0xD61A8).
+std::atomic<void*> g_presenter_object{nullptr};
+constexpr size_t kPaintModeOffset = 0xA8;
+// Telemetria DXGI Present. El overlay de NVIDIA mide las llamadas reales a
+// IDXGISwapChain::Present, asi que esto es la unica metrica que vale para el
+// GATE 1 (los [FRAME] de VdSwap miden el bucle del invitado, no el host).
+std::atomic<uint64_t> g_present_allowed{0};
+std::atomic<uint64_t> g_present_skipped{0};
+std::atomic<uint64_t> g_present_total{0};
+std::atomic<uint64_t> g_present_logged_allowed{0};
+std::atomic<uint64_t> g_present_logged_skipped{0};
+std::atomic<double> g_present_fps{0.0};
+std::mutex g_present_stats_mutex;
+std::chrono::steady_clock::time_point g_present_window_start;
+bool g_present_window_have_start = false;
+uint64_t g_present_window_allowed = 0;
+uint64_t g_present_window_skipped = 0;
+std::atomic<bool> g_present_stack_logged{false};
+int nd_read_paint_mode() {
+  void* presenter = g_presenter_object.load(std::memory_order_acquire);
+  if (presenter == nullptr) {
+    return -1;
+  }
+  return *reinterpret_cast<volatile int32_t*>(static_cast<uint8_t*>(presenter) +
+                                              kPaintModeOffset);
+}
+// Debe llamarse con g_present_stats_mutex tomado.
+void nd_present_stats_tick_locked(bool allowed, std::chrono::steady_clock::time_point now) {
+  if (!g_present_window_have_start) {
+    g_present_window_start = now;
+    g_present_window_have_start = true;
+  }
+  if (allowed) {
+    ++g_present_window_allowed;
+  } else {
+    ++g_present_window_skipped;
+  }
+  // Diagnostico unico del objeto Presenter: confirma el offset de paint_mode_
+  // y el estado de la conexion (implicit vsync, tamano de ui_drawers_).
+  static bool s_presenter_logged = false;
+  if (!s_presenter_logged) {
+    void* presenter = g_presenter_object.load(std::memory_order_acquire);
+    if (presenter != nullptr) {
+      const uint8_t* p = static_cast<const uint8_t*>(presenter);
+      REXLOG_INFO(
+          "neverdead: [PAINT-MODE] presenter={:p} paint_mode_=+0x{:X}={} "
+          "conn_state=+0xAC={} +0xB0={} implicit_vsync=+0xB1={} ui_drawers_size@+0x1C0={}",
+          presenter, kPaintModeOffset, *reinterpret_cast<const int32_t*>(p + 0xA8),
+          *reinterpret_cast<const int32_t*>(p + 0xAC), uint32_t(p[0xB0]), uint32_t(p[0xB1]),
+          *reinterpret_cast<const uint64_t*>(p + 0x1C0));
+      s_presenter_logged = true;
+    }
+  }
+  const double elapsed =
+      std::chrono::duration<double>(now - g_present_window_start).count();
+  if (elapsed >= 2.0) {
+    const double fps = double(g_present_window_allowed) / elapsed;
+    g_present_fps.store(fps, std::memory_order_relaxed);
+    g_present_logged_allowed.store(g_present_window_allowed, std::memory_order_relaxed);
+    g_present_logged_skipped.store(g_present_window_skipped, std::memory_order_relaxed);
+    REXLOG_INFO(
+        "neverdead: [FRAME] dxgi_present_fps={:.1f} (allowed={} skipped={}) "
+        "paint_mode={} interval={:.2f}s",
+        fps, g_present_window_allowed, g_present_window_skipped, nd_read_paint_mode(),
+        elapsed);
+    g_present_window_start = now;
+    g_present_window_allowed = 0;
+    g_present_window_skipped = 0;
+  }
+}
+// Resuelve una direccion de retorno a modulo+RVA para saber QUIEN llama a
+// Present (hilo UI, hilo GPU, overlay, etc.).
+void nd_log_present_caller() {
+  if (g_present_stack_logged.exchange(true, std::memory_order_relaxed)) {
+    return;
+  }
+  void* frames[24] = {};
+  const USHORT count = CaptureStackBackTrace(0, 24, frames, nullptr);
+  REXLOG_INFO("neverdead: [PRESENT-TRACE] tid={} frames={}", GetCurrentThreadId(), count);
+  for (USHORT i = 0; i < count; ++i) {
+    HMODULE module = nullptr;
+    wchar_t path[MAX_PATH] = {};
+    const uintptr_t address = reinterpret_cast<uintptr_t>(frames[i]);
+    if (GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
+                               GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                           reinterpret_cast<LPCWSTR>(address), &module) != 0 &&
+        module != nullptr) {
+      GetModuleFileNameW(module, path, MAX_PATH);
+      const wchar_t* name = wcsrchr(path, L'\\');
+      name = name ? name + 1 : path;
+      char narrow[MAX_PATH] = {};
+      WideCharToMultiByte(CP_UTF8, 0, name, -1, narrow, sizeof(narrow) - 1, nullptr, nullptr);
+      REXLOG_INFO("neverdead: [PRESENT-TRACE]   #{} {} + 0x{:X}", i, narrow,
+                  static_cast<unsigned long>(address -
+                                             reinterpret_cast<uintptr_t>(module)));
+    } else {
+      REXLOG_INFO("neverdead: [PRESENT-TRACE]   #{} 0x{:X}", i,
+                  static_cast<unsigned long>(address));
+    }
+  }
+}
+// Traductor guest VA -> host (instalado por la app).
+nd_translate_fn g_translate = nullptr;
+// Telemetria de frame: deltas entre VdSwap consecutivos.
+std::chrono::steady_clock::time_point g_last_swap;
+bool g_have_last = false;
+double g_sum_ms = 0.0;
+double g_max_ms = 0.0;
+uint64_t g_window_frames = 0;
+uint64_t g_spike_100 = 0;
+uint64_t g_spike_500 = 0;
+uint64_t g_spike_1000 = 0;
+// Clasificacion de picos: contadores del proceso para distinguir I/O de disco,
+// CPU y espera. GetProcessIoCounters/GetProcessTimes son del proceso entero, no
+// de un hilo, pero basta para separar las tres causas:
+//   cpu_proceso ~= duracion  -> se quemo CPU (compilacion de PSO, shaders, bucle)
+//   disco_leido >> 0         -> se bloqueo leyendo assets
+//   cpu_proceso << duracion  -> espera pura (mutex, GPU, vblank, page faults)
+struct NdProcCounters {
+  uint64_t read_bytes = 0;
+  uint64_t write_bytes = 0;
+  uint64_t read_ops = 0;
+  uint64_t write_ops = 0;
+  uint64_t cpu_100ns = 0;
+};
+NdProcCounters g_prev_counters;
+bool g_have_prev_counters = false;
+NdProcCounters nd_sample_counters() {
+  NdProcCounters c;
+  IO_COUNTERS io{};
+  if (GetProcessIoCounters(GetCurrentProcess(), &io) != 0) {
+    c.read_bytes = io.ReadTransferCount;
+    c.write_bytes = io.WriteTransferCount;
+    c.read_ops = io.ReadOperationCount;
+    c.write_ops = io.WriteOperationCount;
+  }
+  FILETIME create_time{};
+  FILETIME exit_time{};
+  FILETIME kernel_time{};
+  FILETIME user_time{};
+  if (GetProcessTimes(GetCurrentProcess(), &create_time, &exit_time, &kernel_time,
+                      &user_time) != 0) {
+    c.cpu_100ns = (uint64_t(kernel_time.dwHighDateTime) << 32 | kernel_time.dwLowDateTime) +
+                  (uint64_t(user_time.dwHighDateTime) << 32 | user_time.dwLowDateTime);
+  }
+  return c;
+}
+// Muestreo de CPU por hilo, con el nombre que les pone el runtime (set_name en
+// XHostThread: "GPU VSync", "GPU Commands", etc.). Sirve para saber QUE hilos
+// queman CPU durante un pico.
+struct NdThreadCpu {
+  DWORD tid = 0;
+  HANDLE handle = nullptr;
+  char name[48] = {};
+  uint64_t cpu_100ns = 0;
+  uint64_t prev_cpu_100ns = 0;
+};
+std::vector<NdThreadCpu> g_threads;
+std::chrono::steady_clock::time_point g_threads_last_refresh;
+void nd_sample_threads();
+void nd_refresh_threads() {
+  // Conservar los tiempos de los hilos que ya conociamos (por tid): si no, en
+  // cada refresco los deltas se pondrian a cero y un pico que caiga en ese
+  // frame se quedaria sin atribucion.
+  std::vector<NdThreadCpu> previous = std::move(g_threads);
+  g_threads.clear();
+  HANDLE snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0);
+  if (snapshot == INVALID_HANDLE_VALUE) {
+    g_threads = std::move(previous);
+    return;
+  }
+  const DWORD pid = GetCurrentProcessId();
+  THREADENTRY32 entry{};
+  entry.dwSize = sizeof(entry);
+  if (Thread32First(snapshot, &entry) != 0) {
+    do {
+      if (entry.th32OwnerProcessID != pid) {
+        continue;
+      }
+      HANDLE handle = OpenThread(THREAD_QUERY_LIMITED_INFORMATION, FALSE, entry.th32ThreadID);
+      if (handle == nullptr) {
+        continue;
+      }
+      NdThreadCpu t;
+      t.tid = entry.th32ThreadID;
+      t.handle = handle;
+      for (const NdThreadCpu& old : previous) {
+        if (old.tid == t.tid) {
+          t.cpu_100ns = old.cpu_100ns;
+          t.prev_cpu_100ns = old.prev_cpu_100ns;
+          std::memcpy(t.name, old.name, sizeof(t.name));
+          break;
+        }
+      }
+      if (t.name[0] == '\0') {
+        PWSTR description = nullptr;
+        if (SUCCEEDED(GetThreadDescription(handle, &description)) && description != nullptr) {
+          WideCharToMultiByte(CP_UTF8, 0, description, -1, t.name, sizeof(t.name) - 1, nullptr,
+                              nullptr);
+          LocalFree(description);
+        }
+      }
+      g_threads.push_back(t);
+    } while (Thread32Next(snapshot, &entry) != 0);
+  }
+  CloseHandle(snapshot);
+  for (NdThreadCpu& t : previous) {
+    if (t.handle != nullptr) {
+      CloseHandle(t.handle);
+    }
+  }
+  // Los hilos nuevos arrancan con prev = cpu para que su primer delta sea 0 y no
+  // la CPU acumulada desde que nacieron.
+  for (NdThreadCpu& t : g_threads) {
+    if (t.cpu_100ns == 0 && t.prev_cpu_100ns == 0) {
+      FILETIME create_time{};
+      FILETIME exit_time{};
+      FILETIME kernel_time{};
+      FILETIME user_time{};
+      if (GetThreadTimes(t.handle, &create_time, &exit_time, &kernel_time, &user_time) != 0) {
+        t.cpu_100ns = (uint64_t(kernel_time.dwHighDateTime) << 32 | kernel_time.dwLowDateTime) +
+                      (uint64_t(user_time.dwHighDateTime) << 32 | user_time.dwLowDateTime);
+        t.prev_cpu_100ns = t.cpu_100ns;
+      }
+    }
+  }
+  g_threads_last_refresh = std::chrono::steady_clock::now();
+}
+void nd_sample_threads() {
+  for (NdThreadCpu& t : g_threads) {
+    FILETIME create_time{};
+    FILETIME exit_time{};
+    FILETIME kernel_time{};
+    FILETIME user_time{};
+    if (GetThreadTimes(t.handle, &create_time, &exit_time, &kernel_time, &user_time) == 0) {
+      continue;
+    }
+    t.prev_cpu_100ns = t.cpu_100ns;
+    t.cpu_100ns = (uint64_t(kernel_time.dwHighDateTime) << 32 | kernel_time.dwLowDateTime) +
+                  (uint64_t(user_time.dwHighDateTime) << 32 | user_time.dwLowDateTime);
+  }
+}
+// ---------------------------------------------------------------------------
+// NOTA: NO hay pacer de 60 FPS en este hook, y no debe anadirse.
+//
+// Se probo (ver .workbuddy-ai/memory) un pacer con
+// std::this_thread::sleep_until(now + 16666us) al entrar en NdVdSwapHook, como
+// pedia el plan de optimizacion. Medido en este equipo:
+//   sin pacer (solo vsync = true): avg = 16.67 ms = 60.0 FPS, max 17.8 ms
+//   con pacer                    : avg = 17.6-17.9 ms = 55.8 FPS, max 93.7 ms
+// Es decir, EMPEORA el frame pacing. Causa: la resolucion del temporizador de
+// Windows por defecto es 15.6 ms, asi que sleep_until sobrepasa el objetivo y
+// convierte un frame de 16.6 ms en uno de 17.9 ms (y de vez en cuando en 93 ms).
+//
+// Ademas es redundante: con vsync = true el worker de vblank del invitado ya
+// dispara a 60 Hz exactos (graphics_system.cpp:164), y el bucle del juego se
+// clava solo en 16.67 ms, como demuestran las lineas [FRAME] de la corrida 096.
+// ---------------------------------------------------------------------------
+}  // namespace
+void nd_set_translate(nd_translate_fn fn) {
+  g_translate = fn;
+}
+#include <dwmapi.h>
+#pragma comment(lib, "dwmapi.lib")
+#pragma comment(lib, "user32.lib")
+#pragma comment(lib, "gdi32.lib")
+#ifndef DWMWA_USE_IMMERSIVE_DARK_MODE
+#define DWMWA_USE_IMMERSIVE_DARK_MODE 20
+#endif
+
+namespace {
+uint8_t read_guest_u8(uint32_t guest_va) {
+  if (g_translate == nullptr) {
+    return 0;
+  }
+  const uint8_t* p = g_translate(guest_va);
+  return p ? *p : 0;
+}
+bool write_guest_u8(uint32_t guest_va, uint8_t value) {
+  if (g_translate == nullptr) {
+    return false;
+  }
+  uint8_t* p = g_translate(guest_va);
+  if (p == nullptr) {
+    return false;
+  }
+  *p = value;
+  return true;
+}
+uint32_t read_guest_be32(uint32_t guest_va) {
+  if (g_translate == nullptr) {
+    return 0;
+  }
+  const uint8_t* p = g_translate(guest_va);
+  if (p == nullptr) {
+    return 0;
+  }
+  return (uint32_t(p[0]) << 24) | (uint32_t(p[1]) << 16) | (uint32_t(p[2]) << 8) |
+         uint32_t(p[3]);
+}
+bool write_guest_be32(uint32_t guest_va, uint32_t value) {
+  if (g_translate == nullptr) {
+    return false;
+  }
+  uint8_t* p = g_translate(guest_va);
+  if (p == nullptr) {
+    return false;
+  }
+  p[0] = uint8_t(value >> 24);
+  p[1] = uint8_t(value >> 16);
+  p[2] = uint8_t(value >> 8);
+  p[3] = uint8_t(value);
+  return true;
+}
+// Los campos del invitado son big-endian: los bits del float vienen en BE.
+float be_bits_to_float(uint32_t be_bits) {
+  const uint32_t host_bits = __builtin_bswap32(be_bits);
+  float f = 0.0f;
+  std::memcpy(&f, &host_bits, sizeof(f));
+  return f;
+}
+uint32_t float_to_be_bits(float f) {
+  uint32_t host_bits = 0;
+  std::memcpy(&host_bits, &f, sizeof(host_bits));
+  return __builtin_bswap32(host_bits);
+}
+}  // namespace
+//=============================================================================
+// Trampolin ejecutable dentro de +/-2 GB del destino (para saltos rel32).
+//=============================================================================
+#ifdef _WIN32
+namespace {
+uint8_t* nd_alloc_near(void* target, size_t size) {
+  for (intptr_t delta = 0x10000; delta <= 0x70000000; delta += 0x10000) {
+    auto* p = static_cast<uint8_t*>(VirtualAlloc(reinterpret_cast<uint8_t*>(target) + delta,
+                                                 size, MEM_COMMIT | MEM_RESERVE,
+                                                 PAGE_EXECUTE_READWRITE));
+    if (p != nullptr) {
+      return p;
+    }
+    p = static_cast<uint8_t*>(VirtualAlloc(reinterpret_cast<uint8_t*>(target) - delta, size,
+                                           MEM_COMMIT | MEM_RESERVE,
+                                           PAGE_EXECUTE_READWRITE));
+    if (p != nullptr) {
+      return p;
+    }
+  }
+  return nullptr;
+}
+//=============================================================================
+// Hook de rex::ui::Presenter::SetPaintModeFromUIThread (RVA 0xD6170)
+//=============================================================================
+// Evidencia (rexruntime.dll distribuida):
+//   0xD6170  56 57 53             push rsi/rdi/rbx
+//   0xD6173  48 83 EC 20          sub rsp, 0x20
+//   0xD6177  39 91 A8 00 00 00    cmp dword [rcx+0xA8], edx   ; paint_mode_
+//   0xD617D  75 08                jne 0xD6187
+//   0xD617F  48 83 C4 20          add rsp,0x20; pop...; ret
+//   0xD6187  89 D7                mov edi, edx                ; new_mode
+//   0xD618C  48 8D 59 58          lea rbx, [rcx+0x58]         ; paint_mode_mutex_
+//   0xD61A8  89 BE A8 00 00 00    mov dword [rsi+0xA8], edi
+//
+// El fallo del parche anterior: GetDesiredPaintModeFromUIThread (0xD6FA0) es
+// una copia out-of-line que NO tiene callers directos en esta build (las
+// llamadas estan inlinadas), asi que parchear su cola no cambiaba nada. El
+// unico punto que escribe paint_mode_ es esta funcion; interceptarla y forzar
+// new_mode=2 (conservando kNone=0) deja el Presenter en
+// kGuestOutputThreadImmediately para siempre, sin tocar la logica de pintado.
+//
+// El stub tambien guarda RCX (this) para poder leer paint_mode_ en la
+// telemetria de Present. Desactivable con ND_FORCE_GUEST_PRESENT=0.
+void NdInstallSetPaintModeHook() {
+  static std::atomic<bool> s_done{false};
+  if (s_done.exchange(true)) {
+    return;
+  }
+  const char* env = std::getenv("ND_FORCE_GUEST_PRESENT");
+  if (env != nullptr && env[0] == '0') {
+    REXLOG_INFO("neverdead: [PAINT-MODE] desactivado por ND_FORCE_GUEST_PRESENT=0");
+    return;
+  }
+  HMODULE mod = GetModuleHandleA("rexruntime.dll");
+  if (mod == nullptr) {
+    REXLOG_ERROR("neverdead: [PAINT-MODE] rexruntime.dll no esta cargada");
+    s_done.store(false, std::memory_order_relaxed);
+    return;
+  }
+  uint8_t* base = reinterpret_cast<uint8_t*>(mod);
+  constexpr size_t kRva = 0xD6170;
+  uint8_t* entry = base + kRva;
+  // push rsi / push rdi / push rbx / sub rsp,20 / cmp [rcx+A8],edx / jne
+  static const uint8_t kExpected[15] = {0x56, 0x57, 0x53, 0x48, 0x83, 0xEC, 0x20, 0x39,
+                                        0x91, 0xA8, 0x00, 0x00, 0x00, 0x75, 0x08};
+  if (std::memcmp(entry, kExpected, sizeof(kExpected)) != 0) {
+    REXLOG_ERROR(
+        "neverdead: [PAINT-MODE] bytes inesperados en rexruntime+0x{:X}: "
+        "{:02X} {:02X} {:02X} {:02X} {:02X}; no se instala",
+        kRva, entry[0], entry[1], entry[2], entry[3], entry[4]);
+    return;
+  }
+  uint8_t* stub = nd_alloc_near(entry, 0x1000);
+  if (stub == nullptr) {
+    REXLOG_ERROR("neverdead: [PAINT-MODE] no se pudo reservar el stub cerca de rexruntime");
+    return;
+  }
+  size_t o = 0;
+  auto put64 = [&](uint64_t v) {
+    std::memcpy(stub + o, &v, sizeof(v));
+    o += sizeof(v);
+  };
+  // mov rax, &g_presenter_object ; mov [rax], rcx
+  stub[o++] = 0x48;
+  stub[o++] = 0xB8;
+  put64(reinterpret_cast<uint64_t>(&g_presenter_object));
+  stub[o++] = 0x48;
+  stub[o++] = 0x89;
+  stub[o++] = 0x08;
+  // test edx, edx ; je +2 ; mov dl, 2   (new_mode 0=kNone se conserva)
+  stub[o++] = 0x85;
+  stub[o++] = 0xD2;
+  stub[o++] = 0x74;
+  stub[o++] = 0x02;
+  stub[o++] = 0xB2;
+  stub[o++] = 0x02;
+  // prologo original
+  stub[o++] = 0x56;
+  stub[o++] = 0x57;
+  stub[o++] = 0x53;
+  stub[o++] = 0x48;
+  stub[o++] = 0x83;
+  stub[o++] = 0xEC;
+  stub[o++] = 0x20;
+  // mov rax, rexruntime+0xD6177 ; jmp rax
+  stub[o++] = 0x48;
+  stub[o++] = 0xB8;
+  put64(reinterpret_cast<uint64_t>(base + 0xD6177));
+  stub[o++] = 0xFF;
+  stub[o++] = 0xE0;
+  FlushInstructionCache(GetCurrentProcess(), stub, o);
+  const intptr_t rel = reinterpret_cast<intptr_t>(stub) - reinterpret_cast<intptr_t>(entry + 5);
+  const int32_t rel32 = static_cast<int32_t>(rel);
+  DWORD old_protect = 0;
+  if (VirtualProtect(entry, 5, PAGE_EXECUTE_READWRITE, &old_protect) == 0) {
+    REXLOG_ERROR("neverdead: [PAINT-MODE] VirtualProtect fallo (err={})", GetLastError());
+    return;
+  }
+  entry[0] = 0xE9;
+  std::memcpy(entry + 1, &rel32, sizeof(rel32));
+  DWORD ignored = 0;
+  VirtualProtect(entry, 5, old_protect, &ignored);
+  FlushInstructionCache(GetCurrentProcess(), entry, 5);
+  REXLOG_INFO(
+      "neverdead: [PAINT-MODE] SetPaintModeFromUIThread hookeado en "
+      "rexruntime+0x{:X} (red de seguridad; en esta build no tiene callers "
+      "directos, el modo efectivo lo fija NdPatchInlinedPaintMode), "
+      "paint_mode_ en +0x{:X}",
+      kRva, kPaintModeOffset);
+}
+//=============================================================================
+// Fuerza el modo deseado 2 en la copia INLINE de GetDesiredPaintMode
+//=============================================================================
+// Al final de Presenter::PaintFromUIThread (RVA 0xD6C83) el compilador inlineo
+// GetDesiredPaintModeFromUIThread:
+//
+//   0xD6C8D  41 BF 01 00 00 00   mov r15d, 1          ; kUIThreadOnRequest
+//   0xD6C93  80 3D .. .. .. .. 01 cmp byte [rip+cvar], 1
+//   0xD6C9A  75 18               jne 0xD6CB4
+//   0xD6C9C  80 BE B1 00 00 00 00 cmp byte [rsi+0xB1], 0  ; implicit vsync
+//   0xD6CA3  75 0F               jne 0xD6CB4
+//   0xD6CA5  45 31 FF            xor r15d, r15d
+//   0xD6CA8  48 83 BE C0 01 00 00 01 cmp qword [rsi+0x1C0], 1 ; ui_drawers_
+//   0xD6CB0  41 83 D7 01         adc r15d, 1          ; 0->2, >=1->1
+//   0xD6CB4  44 39 F8            cmp eax, r15d
+//   ...     44 89 BE A8 00 00 00 mov [rsi+0xA8], r15d
+//
+// Basta con (a) cambiar el valor inicial de r15d a 2 y (b) convertir el `jne`
+// de 0xD6C9A en `jmp`, saltando la comprobacion de implicit vsync y de
+// ui_drawers_. El downgrade temporal a 1 durante el pintado del hilo UI
+// (0xD6BB7) se conserva: es el que toma el mutex y evita que el hilo del
+// invitado pinte en paralelo. Al terminar, el modo vuelve a 2 y el hilo del
+// invitado (RefreshGuestOutput) presenta cada VdSwap.
+void NdPatchInlinedPaintMode() {
+  static std::atomic<bool> s_done{false};
+  if (s_done.exchange(true)) {
+    return;
+  }
+  const char* env = std::getenv("ND_FORCE_GUEST_PRESENT");
+  if (env != nullptr && env[0] == '0') {
+    REXLOG_INFO("neverdead: [PAINT-MODE] copia inline desactivada por ND_FORCE_GUEST_PRESENT=0");
+    return;
+  }
+  HMODULE mod = GetModuleHandleA("rexruntime.dll");
+  if (mod == nullptr) {
+    s_done.store(false, std::memory_order_relaxed);
+    return;
+  }
+  uint8_t* base = reinterpret_cast<uint8_t*>(mod);
+  // 41 BF 01 00 00 00  ->  41 BF 02 00 00 00
+  constexpr size_t kMovRva = 0xD6C8D;
+  // 75 18 (jne) -> EB 18 (jmp)
+  constexpr size_t kJneRva = 0xD6C9A;
+  uint8_t* mov_site = base + kMovRva;
+  uint8_t* jne_site = base + kJneRva;
+  static const uint8_t kMovExpected[6] = {0x41, 0xBF, 0x01, 0x00, 0x00, 0x00};
+  if (std::memcmp(mov_site, kMovExpected, sizeof(kMovExpected)) != 0 || jne_site[0] != 0x75 ||
+      jne_site[1] != 0x18) {
+    REXLOG_ERROR(
+        "neverdead: [PAINT-MODE] bytes inesperados en la copia inline "
+        "(rexruntime+0x{:X}/0x{:X}); no se parchea",
+        kMovRva, kJneRva);
+    return;
+  }
+  DWORD old_protect = 0;
+  if (VirtualProtect(mov_site, 6, PAGE_EXECUTE_READWRITE, &old_protect) == 0) {
+    REXLOG_ERROR("neverdead: [PAINT-MODE] VirtualProtect fallo (err={})", GetLastError());
+    return;
+  }
+  mov_site[2] = 0x02;
+  jne_site[0] = 0xEB;
+  DWORD ignored = 0;
+  VirtualProtect(mov_site, 6, old_protect, &ignored);
+  FlushInstructionCache(GetCurrentProcess(), mov_site, 6);
+  REXLOG_INFO(
+      "neverdead: [PAINT-MODE] copia inline de GetDesiredPaintMode forzada a 2 "
+      "(rexruntime+0x{:X}: mov r15d,2; rexruntime+0x{:X}: jmp sin comprobar "
+      "implicit_vsync/ui_drawers_)",
+      kMovRva, kJneRva);
+}
+//=============================================================================
+// Gating Temprano en PaintFromUIThread (0xD6AC0) y PaintAndPresent (0xFFC10)
+//=============================================================================
+// El hilo UI despierta a 200 Hz (cada 5 ms) en WaitForUITickFromUIThread.
+// Si no ha habido un nuevo VdSwap del invitado desde el ultimo frame presentado,
+// saltamos PaintFromUIThread y PaintAndPresent EN SU ENTRADA:
+// 1. Presenter::PaintFromUIThread (0xD6AC0): retorna void de inmediato.
+// 2. D3D12Presenter::PaintAndPresent (0xFFC10): retorna PaintResult::kNotPresented (0).
+// Esto evita al 100% tocar el command allocator, grabar listas de comandos D3D12
+// y llamar a ExecuteCommandLists 200 veces por segundo sobre el mismo backbuffer.
+static std::atomic<bool> g_force_paint_requested{false};
+extern "C" bool NdCheckShouldPaintUI(void* presenter, bool force_paint) {
+  g_presenter_object.store(presenter, std::memory_order_release);
+  if (force_paint) {
+    g_force_paint_requested.store(true, std::memory_order_release);
+    return true;
+  }
+  const uint64_t swaps = g_vd_swap_calls.load(std::memory_order_acquire);
+  if (swaps > 0) {
+    return false; // Con host_present_from_non_ui_thread = true, el hilo UI nunca pinta frames del juego
+  }
+  return true; // swaps == 0 (permite pintar la ventana antes del primer swap de juego)
+}
+extern "C" bool NdCheckShouldPaintAndPresent() {
+  if (g_force_paint_requested.exchange(false, std::memory_order_acq_rel)) {
+    return true;
+  }
+  const uint64_t swaps = g_vd_swap_calls.load(std::memory_order_acquire);
+  if (swaps == 0) {
+    return true;
+  }
+  uint64_t last = g_last_presented_swap.load(std::memory_order_acquire);
+  while (swaps > last) {
+    if (g_last_presented_swap.compare_exchange_weak(
+            last, swaps, std::memory_order_acq_rel, std::memory_order_acquire)) {
+      return true; // Frame reclamado atomicamente por este hilo GPU
+    }
+  }
+  return false; // Ya fue reclamado por otro hilo o swaps <= last (evita repintar duplicados)
+}
+void NdInstallPaintFromUIThreadHook() {
+  static std::atomic<bool> s_done{false};
+  if (s_done.exchange(true)) {
+    return;
+  }
+  HMODULE mod = GetModuleHandleA("rexruntime.dll");
+  if (mod == nullptr) {
+    s_done.store(false, std::memory_order_relaxed);
+    return;
+  }
+  uint8_t* base = reinterpret_cast<uint8_t*>(mod);
+  constexpr size_t kRva = 0xD6AC0;
+  uint8_t* entry = base + kRva;
+  // push r15 / push r14 / push rsi
+  static const uint8_t kExpected[5] = {0x41, 0x57, 0x41, 0x56, 0x56};
+  if (std::memcmp(entry, kExpected, sizeof(kExpected)) != 0) {
+    REXLOG_ERROR("neverdead: [PAINT-GATE] bytes inesperados en PaintFromUIThread+0x{:X}; no se instala",
+                 kRva);
+    return;
+  }
+  uint8_t* stub = nd_alloc_near(entry, 0x1000);
+  if (stub == nullptr) {
+    REXLOG_ERROR("neverdead: [PAINT-GATE] no se pudo reservar el stub de PaintFromUIThread");
+    return;
+  }
+  size_t o = 0;
+  auto put64 = [&](uint64_t v) {
+    std::memcpy(stub + o, &v, sizeof(v));
+    o += sizeof(v);
+  };
+  // sub rsp, 0x28
+  stub[o++] = 0x48; stub[o++] = 0x83; stub[o++] = 0xEC; stub[o++] = 0x28;
+  // mov [rsp+0x20], rcx
+  stub[o++] = 0x48; stub[o++] = 0x89; stub[o++] = 0x4C; stub[o++] = 0x24; stub[o++] = 0x20;
+  // mov [rsp+0x18], rdx
+  stub[o++] = 0x48; stub[o++] = 0x89; stub[o++] = 0x54; stub[o++] = 0x24; stub[o++] = 0x18;
+  // mov rax, &NdCheckShouldPaintUI
+  stub[o++] = 0x48; stub[o++] = 0xB8;
+  put64(reinterpret_cast<uint64_t>(&NdCheckShouldPaintUI));
+  // call rax
+  stub[o++] = 0xFF; stub[o++] = 0xD0;
+  // mov rdx, [rsp+0x18]
+  stub[o++] = 0x48; stub[o++] = 0x8B; stub[o++] = 0x54; stub[o++] = 0x24; stub[o++] = 0x18;
+  // mov rcx, [rsp+0x20]
+  stub[o++] = 0x48; stub[o++] = 0x8B; stub[o++] = 0x4C; stub[o++] = 0x24; stub[o++] = 0x20;
+  // add rsp, 0x28
+  stub[o++] = 0x48; stub[o++] = 0x83; stub[o++] = 0xC4; stub[o++] = 0x28;
+  // test al, al (tras add rsp para preservar Zero Flag!)
+  stub[o++] = 0x84; stub[o++] = 0xC0;
+  // jnz +1 (to stolen prologue)
+  stub[o++] = 0x75; stub[o++] = 0x01;
+  // ret (early exit!)
+  stub[o++] = 0xC3;
+  // Stolen 5 bytes:
+  stub[o++] = 0x41; stub[o++] = 0x57; // push r15
+  stub[o++] = 0x41; stub[o++] = 0x56; // push r14
+  stub[o++] = 0x56;                   // push rsi
+  // mov rax, entry + 5 ; jmp rax
+  stub[o++] = 0x48; stub[o++] = 0xB8;
+  put64(reinterpret_cast<uint64_t>(entry + 5));
+  stub[o++] = 0xFF; stub[o++] = 0xE0;
+  FlushInstructionCache(GetCurrentProcess(), stub, o);
+  const intptr_t rel = reinterpret_cast<intptr_t>(stub) - reinterpret_cast<intptr_t>(entry + 5);
+  const int32_t rel32 = static_cast<int32_t>(rel);
+  DWORD old_protect = 0;
+  if (VirtualProtect(entry, 5, PAGE_EXECUTE_READWRITE, &old_protect) == 0) {
+    return;
+  }
+  entry[0] = 0xE9;
+  std::memcpy(entry + 1, &rel32, sizeof(rel32));
+  DWORD ignored = 0;
+  VirtualProtect(entry, 5, old_protect, &ignored);
+  FlushInstructionCache(GetCurrentProcess(), entry, 5);
+  REXLOG_INFO("neverdead: [PAINT-GATE] Puerta temprana activa en Presenter::PaintFromUIThread (rexruntime+0x{:X})",
+              kRva);
+}
+void NdInstallPaintAndPresentGate() {
+  static std::atomic<bool> s_done{false};
+  if (s_done.exchange(true)) {
+    return;
+  }
+  HMODULE mod = GetModuleHandleA("rexruntime.dll");
+  if (mod == nullptr) {
+    s_done.store(false, std::memory_order_relaxed);
+    return;
+  }
+  uint8_t* base = reinterpret_cast<uint8_t*>(mod);
+  constexpr size_t kRva = 0xFFC10;
+  uint8_t* entry = base + kRva;
+  // Stolen 12 bytes: 55 41 57 41 56 41 55 41 54 56 57 53
+  // (push rbp / push r15 / push r14 / push r13 / push r12 / push rsi / push rdi / push rbx)
+  static const uint8_t kExpected[12] = {
+      0x55, 0x41, 0x57, 0x41, 0x56, 0x41, 0x55, 0x41, 0x54, 0x56, 0x57, 0x53};
+  if (std::memcmp(entry, kExpected, sizeof(kExpected)) != 0) {
+    REXLOG_ERROR(
+        "neverdead: [PAINT-GATE] bytes inesperados en D3D12Presenter::PaintAndPresent+0x{:X}; no se instala",
+        kRva);
+    return;
+  }
+  uint8_t* stub = nd_alloc_near(entry, 0x1000);
+  if (stub == nullptr) {
+    REXLOG_ERROR("neverdead: [PAINT-GATE] no se pudo reservar stub cerca de PaintAndPresent");
+    return;
+  }
+  size_t o = 0;
+  auto put64 = [&](uint64_t v) {
+    std::memcpy(stub + o, &v, sizeof(v));
+    o += sizeof(v);
+  };
+  // sub rsp, 0x28
+  stub[o++] = 0x48; stub[o++] = 0x83; stub[o++] = 0xEC; stub[o++] = 0x28;
+  // mov [rsp+0x20], rcx
+  stub[o++] = 0x48; stub[o++] = 0x89; stub[o++] = 0x4C; stub[o++] = 0x24; stub[o++] = 0x20;
+  // mov [rsp+0x18], rdx
+  stub[o++] = 0x48; stub[o++] = 0x89; stub[o++] = 0x54; stub[o++] = 0x24; stub[o++] = 0x18;
+  // mov rax, &NdCheckShouldPaintAndPresent
+  stub[o++] = 0x48; stub[o++] = 0xB8;
+  put64(reinterpret_cast<uint64_t>(&NdCheckShouldPaintAndPresent));
+  // call rax
+  stub[o++] = 0xFF; stub[o++] = 0xD0;
+  // mov rdx, [rsp+0x18]
+  stub[o++] = 0x48; stub[o++] = 0x8B; stub[o++] = 0x54; stub[o++] = 0x24; stub[o++] = 0x18;
+  // mov rcx, [rsp+0x20]
+  stub[o++] = 0x48; stub[o++] = 0x8B; stub[o++] = 0x4C; stub[o++] = 0x24; stub[o++] = 0x20;
+  // add rsp, 0x28
+  stub[o++] = 0x48; stub[o++] = 0x83; stub[o++] = 0xC4; stub[o++] = 0x28;
+  // test al, al (tras add rsp para preservar Zero Flag!)
+  stub[o++] = 0x84; stub[o++] = 0xC0;
+  // jnz +3
+  stub[o++] = 0x75; stub[o++] = 0x03;
+  // xor eax, eax ; ret (PaintResult::kNotPresented = 0)
+  stub[o++] = 0x31; stub[o++] = 0xC0;
+  stub[o++] = 0xC3;
+  // Stolen 12 bytes:
+  for (size_t i = 0; i < sizeof(kExpected); ++i) {
+    stub[o++] = kExpected[i];
+  }
+  // mov rax, entry + 12 ; jmp rax
+  stub[o++] = 0x48; stub[o++] = 0xB8;
+  put64(reinterpret_cast<uint64_t>(entry + 12));
+  stub[o++] = 0xFF; stub[o++] = 0xE0;
+  FlushInstructionCache(GetCurrentProcess(), stub, o);
+  const intptr_t rel = reinterpret_cast<intptr_t>(stub) - reinterpret_cast<intptr_t>(entry + 5);
+  const int32_t rel32 = static_cast<int32_t>(rel);
+  DWORD old_protect = 0;
+  if (VirtualProtect(entry, 12, PAGE_EXECUTE_READWRITE, &old_protect) == 0) {
+    return;
+  }
+  entry[0] = 0xE9;
+  std::memcpy(entry + 1, &rel32, sizeof(rel32));
+  for (size_t i = 5; i < 12; ++i) {
+    entry[i] = 0x90;
+  }
+  DWORD ignored = 0;
+  VirtualProtect(entry, 12, old_protect, &ignored);
+  FlushInstructionCache(GetCurrentProcess(), entry, 12);
+  REXLOG_INFO(
+      "neverdead: [PAINT-GATE] Puerta de prologo activa en D3D12Presenter::PaintAndPresent "
+      "(rexruntime+0x{:X}) -> kNotPresented si no hay nuevo frame",
+      kRva);
+}
+//=============================================================================
+// Fuerza paint_mode_=2 al VOLVER de PaintFromUIThread (RVA 0xDE951)
+//=============================================================================
+// El wrapper que llama a PaintFromUIThread (Window::Paint..., RVA 0xDE920)
+// tiene este epilogo:
+//   0xDE94C  call 0xD6AC0                 ; Presenter::PaintFromUIThread
+//   0xDE951  48 89 F1                   mov rcx, rsi
+//   0xDE954  C6 81 C0 00 00 00 00       mov byte [rcx+0xC0], 0
+//   0xDE95B  48 83 C4 20                add rsp,0x20
+//   0xDE95F  5E                         pop rsi
+//   0xDE960  C3                         ret
+// `rsi` es la Window y [rsi+0xB0] el puntero al Presenter (cargado como dword
+// en 0xDE940). Sustituimos ese epilogo por un stub que fuerza [presenter+0xA8]
+// = 2 antes de restaurar el flag de pintado. Asi, entre WM_PAINT y WM_PAINT el
+// modo queda en 2 y el early-return de NdInstallPaintFromUIThreadHook puede
+// saltarse los paints redundantes; el hilo del invitado presenta cada VdSwap.
+void NdInstallPaintReturnHook() {
+  static std::atomic<bool> s_done{false};
+  if (s_done.exchange(true)) {
+    return;
+  }
+  HMODULE mod = GetModuleHandleA("rexruntime.dll");
+  if (mod == nullptr) {
+    s_done.store(false, std::memory_order_relaxed);
+    return;
+  }
+  uint8_t* base = reinterpret_cast<uint8_t*>(mod);
+  constexpr size_t kRva = 0xDE951;
+  uint8_t* site = base + kRva;
+  static const uint8_t kExpected[16] = {0x48, 0x89, 0xF1, 0xC6, 0x81, 0xC0, 0x00, 0x00,
+                                        0x00, 0x00, 0x48, 0x83, 0xC4, 0x20, 0x5E, 0xC3};
+  if (std::memcmp(site, kExpected, sizeof(kExpected)) != 0) {
+    REXLOG_ERROR("neverdead: [PAINT-MODE] bytes inesperados en el epilogo de Paint (rexruntime+0x{:X}); no se instala",
+                 kRva);
+    return;
+  }
+  uint8_t* stub = nd_alloc_near(site, 0x1000);
+  if (stub == nullptr) {
+    REXLOG_ERROR("neverdead: [PAINT-MODE] no se pudo reservar el stub del epilogo de Paint");
+    return;
+  }
+  size_t o = 0;
+  // mov rax, [rsi+0xB0] (64-bit presenter pointer!) ; mov dword [rax+0xA8], 2 ; mov rcx,rsi
+  // mov byte [rcx+0xC0],0 ; add rsp,0x20 ; pop rsi ; ret
+  static const uint8_t kStub[] = {
+      0x48, 0x8B, 0x86, 0xB0, 0x00, 0x00, 0x00,
+      0xC7, 0x80, 0xA8, 0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00,
+      0x48, 0x89, 0xF1,
+      0xC6, 0x81, 0xC0, 0x00, 0x00, 0x00, 0x00,
+      0x48, 0x83, 0xC4, 0x20,
+      0x5E,
+      0xC3};
+  std::memcpy(stub, kStub, sizeof(kStub));
+  o = sizeof(kStub);
+  FlushInstructionCache(GetCurrentProcess(), stub, o);
+  const intptr_t rel = reinterpret_cast<intptr_t>(stub) - reinterpret_cast<intptr_t>(site + 5);
+  const int32_t rel32 = static_cast<int32_t>(rel);
+  DWORD old_protect = 0;
+  if (VirtualProtect(site, sizeof(kExpected), PAGE_EXECUTE_READWRITE, &old_protect) == 0) {
+    return;
+  }
+  site[0] = 0xE9;
+  std::memcpy(site + 1, &rel32, sizeof(rel32));
+  std::memset(site + 5, 0x90, sizeof(kExpected) - 5);
+  DWORD ignored = 0;
+  VirtualProtect(site, sizeof(kExpected), old_protect, &ignored);
+  FlushInstructionCache(GetCurrentProcess(), site, sizeof(kExpected));
+  REXLOG_INFO("neverdead: [PAINT-MODE] epilogo de PaintFromUIThread hookeado (rexruntime+0x{:X}): paint_mode_=2 tras cada paint",
+              kRva);
+}
+//=============================================================================
+// Hook de IDXGISwapChain::Present sobre la vtable de DXGI
+//=============================================================================
+// El parche anterior en rexruntime+0x586A92 NO era Present: los bytes eran
+//   mov rcx,[r13+0x18] ; mov rax,[rcx] ; call [rax+0x40]
+// dentro de un bucle que recorre objetos y llama a [obj+0x20] + Release; el
+// offset 0x40 de ID3D12Fence es SetEventOnCompletion(Value, hEvent), no el
+// Present del swapchain. Instalarlo no cambio el overlay (190 FPS) y ademas
+// habria roto la sincronizacion de fences. Aqui se intercepta el metodo real:
+// toda swapchain creada por IDXGIFactory2::CreateSwapChainForHwnd pasa por el
+// detour y su vtable[8] (Present) se sustituye por NdPresentHook.
+using NdPresentFn = HRESULT(STDMETHODCALLTYPE*)(IDXGISwapChain*, UINT, UINT);
+using NdCreateSwapChainForHwndFn = HRESULT(STDMETHODCALLTYPE*)(
+    IDXGIFactory2*, IUnknown*, HWND, const DXGI_SWAP_CHAIN_DESC1*,
+    const DXGI_SWAP_CHAIN_FULLSCREEN_DESC*, IDXGIOutput*, IDXGISwapChain1**);
+struct NdSwapChainVtable {
+  void** vtable = nullptr;
+  NdPresentFn original_present = nullptr;
+};
+NdSwapChainVtable g_swapchain_vtables[8];
+size_t g_swapchain_vtable_count = 0;
+std::mutex g_swapchain_vtable_mutex;
+NdCreateSwapChainForHwndFn g_real_create_swapchain_for_hwnd = nullptr;
+std::mutex g_factory_hook_mutex;
+bool g_factory_hook_installed = false;
+NdPresentFn nd_find_original_present(void* swap_chain) {
+  void** vtable = *reinterpret_cast<void***>(swap_chain);
+  std::lock_guard<std::mutex> lock(g_swapchain_vtable_mutex);
+  for (size_t i = 0; i < g_swapchain_vtable_count; ++i) {
+    if (g_swapchain_vtables[i].vtable == vtable) {
+      return g_swapchain_vtables[i].original_present;
+    }
+  }
+  return nullptr;
+}
+extern "C" HRESULT STDMETHODCALLTYPE NdPresentHook(IDXGISwapChain* swap_chain,
+                                                    UINT sync_interval, UINT flags) {
+  if (swap_chain == nullptr) {
+    return E_POINTER;
+  }
+  NdPresentFn real_present = nd_find_original_present(swap_chain);
+  if (real_present == nullptr) {
+    REXLOG_ERROR("neverdead: [PRESENT-HOOK] Present sin original registrado; se deja pasar");
+    return E_FAIL;
+  }
+  nd_log_present_caller();
+  const auto now = std::chrono::steady_clock::now();
+  // En DXGI_SWAP_EFFECT_FLIP_DISCARD es critico llamar siempre a real_present()
+  // si el renderizado ya fue ejecutado, garantizando el avance del indice de backbuffer.
+
+  g_present_total.fetch_add(1, std::memory_order_relaxed);
+  g_present_allowed.fetch_add(1, std::memory_order_relaxed);
+  {
+    std::lock_guard<std::mutex> lock(g_present_stats_mutex);
+    nd_present_stats_tick_locked(true, now);
+  }
+  // Presentacion inmediata sin bloqueo de VBlank fisico (igual que Xenia Canary vsync = false)
+  const UINT present_sync = 0;
+  const UINT present_flags = flags | DXGI_PRESENT_ALLOW_TEARING;
+  return real_present(swap_chain, present_sync, present_flags);
+}
+void NdHookSwapChainVtable(IDXGISwapChain* swap_chain) {
+  void** vtable = *reinterpret_cast<void***>(swap_chain);
+  std::lock_guard<std::mutex> lock(g_swapchain_vtable_mutex);
+  for (size_t i = 0; i < g_swapchain_vtable_count; ++i) {
+    if (g_swapchain_vtables[i].vtable == vtable) {
+      return;
+    }
+  }
+  if (g_swapchain_vtable_count >= 8) {
+    return;
+  }
+  NdPresentFn original = reinterpret_cast<NdPresentFn>(vtable[8]);
+  if (original == &NdPresentHook) {
+    return;
+  }
+  DWORD old_protect = 0;
+  if (VirtualProtect(&vtable[8], sizeof(void*), PAGE_READWRITE, &old_protect) == 0) {
+    REXLOG_ERROR("neverdead: [PRESENT-HOOK] VirtualProtect de vtable[8] fallo (err={})",
+                 GetLastError());
+    return;
+  }
+  g_swapchain_vtables[g_swapchain_vtable_count].vtable = vtable;
+  g_swapchain_vtables[g_swapchain_vtable_count].original_present = original;
+  ++g_swapchain_vtable_count;
+  vtable[8] = reinterpret_cast<void*>(&NdPresentHook);
+  DWORD ignored = 0;
+  VirtualProtect(&vtable[8], sizeof(void*), old_protect, &ignored);
+  FlushInstructionCache(GetCurrentProcess(), &vtable[8], sizeof(void*));
+  REXLOG_INFO(
+      "neverdead: [PRESENT-HOOK] vtable[8] (Present) hookeada: swap_chain={:p} "
+      "original={:p}",
+      static_cast<void*>(swap_chain), reinterpret_cast<void*>(original));
+}
+static HWND g_game_hwnd = nullptr;
+static WNDPROC g_original_game_wndproc = nullptr;
+
+LRESULT CALLBACK NdGameSubclassWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
+  if (msg == WM_KEYDOWN && wParam == VK_F1) {
+    NdOpenConfigUI();
+    return 0;
+  }
+  if (msg == WM_CLOSE || msg == WM_DESTROY) {
+    REXLOG_INFO("neverdead: [CLEAN-EXIT] WM_CLOSE/WM_DESTROY interceptado en HWND {:p}; cerrando proceso limpiamente...",
+                static_cast<void*>(hwnd));
+    TerminateProcess(GetCurrentProcess(), 0);
+    return 0;
+  }
+  if (g_original_game_wndproc != nullptr) {
+    return CallWindowProcW(g_original_game_wndproc, hwnd, msg, wParam, lParam);
+  }
+  return DefWindowProcW(hwnd, msg, wParam, lParam);
+}
+
+extern "C" HRESULT STDMETHODCALLTYPE NdCreateSwapChainForHwndDetour(
+    IDXGIFactory2* factory, IUnknown* device, HWND hwnd, const DXGI_SWAP_CHAIN_DESC1* desc,
+    const DXGI_SWAP_CHAIN_FULLSCREEN_DESC* fullscreen_desc, IDXGIOutput* restrict_to_output,
+    IDXGISwapChain1** swap_chain_out) {
+  if (g_real_create_swapchain_for_hwnd == nullptr) {
+    return E_FAIL;
+  }
+  if (hwnd != nullptr && g_game_hwnd == nullptr) {
+    g_game_hwnd = hwnd;
+    g_original_game_wndproc = reinterpret_cast<WNDPROC>(
+        SetWindowLongPtrW(hwnd, GWLP_WNDPROC, reinterpret_cast<LONG_PTR>(&NdGameSubclassWndProc)));
+    REXLOG_INFO("neverdead: [WINDOW] HWND={:p} subclassed para interceptar F1 y WM_CLOSE limpia",
+                static_cast<void*>(hwnd));
+  }
+  HRESULT hr = g_real_create_swapchain_for_hwnd(factory, device, hwnd, desc, fullscreen_desc,
+                                                restrict_to_output, swap_chain_out);
+  if (SUCCEEDED(hr) && swap_chain_out != nullptr && *swap_chain_out != nullptr) {
+    NdHookSwapChainVtable(*swap_chain_out);
+  }
+  return hr;
+}
+void nd_install_factory_hook() {
+  std::lock_guard<std::mutex> lock(g_factory_hook_mutex);
+  if (g_factory_hook_installed) {
+    return;
+  }
+  HMODULE dxgi = GetModuleHandleA("dxgi.dll");
+  if (dxgi == nullptr) {
+    dxgi = LoadLibraryA("dxgi.dll");
+  }
+  if (dxgi == nullptr) {
+    REXLOG_ERROR("neverdead: [PRESENT-HOOK] dxgi.dll no disponible");
+    return;
+  }
+  using CreateDXGIFactory2Fn = HRESULT(WINAPI*)(UINT, REFIID, void**);
+  auto create_dxgi_factory2 =
+      reinterpret_cast<CreateDXGIFactory2Fn>(GetProcAddress(dxgi, "CreateDXGIFactory2"));
+  if (create_dxgi_factory2 == nullptr) {
+    REXLOG_ERROR("neverdead: [PRESENT-HOOK] CreateDXGIFactory2 no exportado");
+    return;
+  }
+  IDXGIFactory2* factory = nullptr;
+  HRESULT hr = create_dxgi_factory2(0, __uuidof(IDXGIFactory2),
+                                    reinterpret_cast<void**>(&factory));
+  if (FAILED(hr) || factory == nullptr) {
+    REXLOG_ERROR("neverdead: [PRESENT-HOOK] CreateDXGIFactory2 fallo (hr=0x{:08X})",
+                 static_cast<unsigned>(hr));
+    return;
+  }
+  void** vtable = *reinterpret_cast<void***>(factory);
+  constexpr size_t kCreateSwapChainForHwndIndex = 15;
+  void* slot = vtable[kCreateSwapChainForHwndIndex];
+  HMODULE slot_module = nullptr;
+  if (GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
+                             GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                         reinterpret_cast<LPCWSTR>(slot), &slot_module) == 0 ||
+      slot_module != dxgi) {
+    REXLOG_ERROR(
+        "neverdead: [PRESENT-HOOK] el slot CreateSwapChainForHwnd no apunta a dxgi.dll "
+        "(slot={:p}); no se instala",
+        slot);
+    factory->Release();
+    return;
+  }
+  DWORD old_protect = 0;
+  if (VirtualProtect(&vtable[kCreateSwapChainForHwndIndex], sizeof(void*), PAGE_READWRITE,
+                     &old_protect) == 0) {
+    REXLOG_ERROR("neverdead: [PRESENT-HOOK] VirtualProtect de la factory fallo (err={})",
+                 GetLastError());
+    factory->Release();
+    return;
+  }
+  g_real_create_swapchain_for_hwnd = reinterpret_cast<NdCreateSwapChainForHwndFn>(slot);
+  vtable[kCreateSwapChainForHwndIndex] =
+      reinterpret_cast<void*>(&NdCreateSwapChainForHwndDetour);
+  DWORD ignored = 0;
+  VirtualProtect(&vtable[kCreateSwapChainForHwndIndex], sizeof(void*), old_protect, &ignored);
+  FlushInstructionCache(GetCurrentProcess(), &vtable[kCreateSwapChainForHwndIndex],
+                        sizeof(void*));
+  factory->Release();
+  g_factory_hook_installed = true;
+  REXLOG_INFO(
+      "neverdead: [PRESENT-HOOK] IDXGIFactory2::CreateSwapChainForHwnd hookeado "
+      "(vtable[{}]) en dxgi.dll; Present se interceptara al crear el swap chain",
+      kCreateSwapChainForHwndIndex);
+}
+}  // namespace
+#endif  // _WIN32
+//=============================================================================
+// GATE 1 — Forzar PaintMode::kGuestOutputThreadImmediately en rexruntime.dll
+//=============================================================================
+// Problema: los overlays externos marcan el refresco del monitor (200 Hz en
+// este equipo) en vez de los 60 FPS del invitado, porque el presenter pinta en
+// el hilo UI una vez por vblank del monitor.
+//
+// `rex::ui::Presenter::GetDesiredPaintModeFromUIThread` (RVA 0xD6FA0 en la DLL
+// distribuida, 43 bytes) se desensambla asi:
+//
+//   0xD6FA0  31 C0                    xor  eax, eax             ; kNone
+//   0xD6FA2  84 D2                    test dl, dl               ; is_paintable
+//   0xD6FA4  74 24                    je   0xD6FCA (ret)
+//   0xD6FA6  B8 01 00 00 00           mov  eax, 1               ; kUIThreadOnRequest
+//   0xD6FAB  80 3D .. .. .. .. 01     cmp  byte [rip+X], 1      ; host_present_from_non_ui_thread
+//   0xD6FB2  75 16                    jne  0xD6FCA (ret)
+//   0xD6FB4  80 B9 B1 00 00 00 00     cmp  byte [rcx+0xB1], 0   ; implicit vsync
+//   0xD6FBB  75 0D                    jne  0xD6FCA (ret)
+//   0xD6FBD  31 C0                    xor  eax, eax
+//   0xD6FBF  48 83 B9 C0 01 00 00 01  cmp  qword [rcx+0x1C0], 1 ; ui_drawers_.size()
+//   0xD6FC7  83 D0 01                 adc  eax, 1               ; 0 -> 2, >=1 -> 1
+//   0xD6FCA  C3                       ret
+//
+// El unico tramo que depende de `ui_drawers_` es 0xD6FBD..0xD6FC9 (13 bytes).
+// Sustituirlo por `mov eax, 2` + NOPs hace que, cuando la superficie es
+// pintable, invitado y host vayan 1:1: cada VdSwap produce exactamente un
+// Present y el overlay mide 60. La rama `!is_paintable -> kNone` queda intacta
+// (esta antes del parche), igual que las dos salidas anticipadas por cvar.
+//
+// HALLAZGO 2026-10-25: en esta build (rexruntime.dll 0.10.0.24-dev) esta
+// funcion tiene CERO callers directos: el compilador inlineo
+// GetDesiredPaintModeFromUIThread en sus tres usos (presenter.cpp:512, 1405 y
+// 1544). Parchear la copia out-of-line, por tanto, no cambia el modo. Se deja
+// el parche como documentacion/defensa por si otra build la llama, pero el
+// efecto real lo produce NdInstallSetPaintModeHook (0xD6170), que intercepta
+// el unico punto que escribe paint_mode_.
+//
+// NO se toca rexruntime.dll en disco: se parchea la copia mapeada en memoria,
+// verificando los bytes originales antes de escribir. Desactivable con
+// ND_PRESENT_GATE=0.
+void NdSilenceXctdLog() {
+  static std::atomic<bool> s_done{false};
+  if (s_done.load(std::memory_order_relaxed)) {
+    return;
+  }
+  HMODULE mod = GetModuleHandleA("rexruntime.dll");
+  if (mod == nullptr) {
+    return;
+  }
+  uint8_t* base = reinterpret_cast<uint8_t*>(mod);
+  constexpr size_t kRva = 0x3DB042;
+  uint8_t* target = base + kRva;
+  // 85 C0 0F 84 34 02 00 00 (test eax, eax; je 0x3db27e)
+  static const uint8_t kExpected[8] = {0x85, 0xC0, 0x0F, 0x84, 0x34, 0x02, 0x00, 0x00};
+  // E9 37 02 00 00 90 90 90 (jmp 0x3db27e; 3x NOP)
+  static const uint8_t kPatched[8] = {0xE9, 0x37, 0x02, 0x00, 0x00, 0x90, 0x90, 0x90};
+  if (std::memcmp(target, kExpected, sizeof(kExpected)) != 0) {
+    REXLOG_ERROR("neverdead: [XCTD-SILENCE] bytes inesperados en rexruntime+0x{:X}; no se parchea", kRva);
+    s_done.store(true, std::memory_order_relaxed);
+    return;
+  }
+  DWORD old_protect = 0;
+  if (VirtualProtect(target, sizeof(kPatched), PAGE_EXECUTE_READWRITE, &old_protect) != 0) {
+    std::memcpy(target, kPatched, sizeof(kPatched));
+    DWORD ignored = 0;
+    VirtualProtect(target, sizeof(kPatched), old_protect, &ignored);
+    FlushInstructionCache(GetCurrentProcess(), target, sizeof(kPatched));
+    s_done.store(true, std::memory_order_relaxed);
+    REXLOG_INFO("neverdead: [XCTD-SILENCE] error logs de XFileXctdCompressionInformation silenciados (rexruntime+0x{:X})", kRva);
+  }
+}
+//=============================================================================
+// Gating de Present de DXGI (Sincronizacion 1:1 con frames del invitado)
+//=============================================================================
+// IMPORTANTE (auditoria 2026-10-25): el parche anterior en rexruntime+0x586A92
+// NO era IDXGISwapChain::Present. El desensamblado real de ese tramo es:
+//
+//   00586A92  49 8B 4D 18        mov rcx, [r13+0x18]
+//   00586A96  48 8B 01           mov rax, [rcx]
+//   00586A99  FF 50 40           call [rax+0x40]
+//   00586A9C  85 C0              test eax, eax
+//   00586A9E  0F B6 DB           movzx ebx, bl
+//   00586AA1  41 0F 48 DF        cmovs ebx, r15d
+//
+// con [r13+0x20] como valor y [rsi+0x60] como handle: es el metodo 8 de
+// ID3D12Fence (SetEventOnCompletion), dentro de un bucle que recorre recursos
+// y los libera. Instalar alli el gate no filtraba Present (el overlay seguia
+// a 190 FPS) y podia romper la sincronizacion de fences.
+//
+// La puerta real se instala sobre la vtable de IDXGISwapChain, interceptando
+// IDXGIFactory2::CreateSwapChainForHwnd para enganchar el swap chain en cuanto
+// se crea (ver nd_install_factory_hook / NdPresentHook arriba).
+void NdInstallPresentGate() {
+#ifdef _WIN32
+  nd_install_factory_hook();
+#endif
+}
+//=============================================================================
+// Desbloqueo asincrono real del Pipeline Cache en rexgpu-xenos.dll (Estilo DownpourRecomp)
+//
+// En rexgpu-xenos.dll, PipelineCache::EndSubmission (0x0EAF90):
+//   0xEB030: 0F 84 81 00 00 00        je 0xEB0B7 (cola vacia -> ret)
+//   0xEB039: call 0xead90             drena cola y vincula PSOs completados por workers
+//   ...
+//   0xEB093: call _Cnd_signal         despierta hilos workers para compilar
+//   0xEB098: mov rcx, [rsi + 0x488]   WaitHandle
+//   0xEB09F: movabs r8, 0x7fffffffffffffff ; TIMEOUT INFINITO (BARRERA QUE CONGELA EL JUEGO 1-3s)
+//   0xEB0B2: jmp rexruntime!Wait
+//
+// SOLUCION (DownpourRecomp / Splatterhouse):
+// NO tocar 0xEB030: dejar que call 0xead90 y call _Cnd_signal se ejecuten SIEMPRE.
+// Modificar unicamente el timeout infinito de 0xEB09F (10 bytes: 49 B8 ...):
+//   Original: 49 B8 FF FF FF FF FF FF FF 7F (timeout infinito)
+//   Parche:   49 B8 01 00 00 00 00 00 00 00 (timeout de 1 ms)
+// Asi los workers despiertan al instante, compilan en segundo plano, 0xead90 los
+// vincula en los siguientes frames y el hilo principal jamas se congela 1-3s.
+//=============================================================================
+void NdPatchAsyncPipelineCache() {
+  static std::atomic<bool> s_done{false};
+  if (s_done.load(std::memory_order_relaxed)) {
+    return;
+  }
+  HMODULE mod = GetModuleHandleA("rexgpu-xenos.dll");
+  if (mod == nullptr) {
+    return;
+  }
+  uint8_t* base = reinterpret_cast<uint8_t*>(mod);
+  constexpr size_t kRvaTimeout = 0xEB09F;
+  uint8_t* target = base + kRvaTimeout;
+  // movabs r8, 0x7fffffffffffffff
+  static const uint8_t kExpected[10] = {
+      0x49, 0xB8, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x7F};
+  uint64_t timeout_ms = 0; // Default: 0 ms timeout (retorno inmediato sin congelar hilo de render)
+  const char* env_to = std::getenv("ND_PSO_TIMEOUT_MS");
+  if (env_to != nullptr) {
+    timeout_ms = std::strtoull(env_to, nullptr, 10);
+  }
+  uint8_t kPatched[10] = {0x49, 0xB8, 0, 0, 0, 0, 0, 0, 0, 0};
+  std::memcpy(kPatched + 2, &timeout_ms, sizeof(timeout_ms));
+  if (std::memcmp(target, kExpected, sizeof(kExpected)) != 0) {
+    REXLOG_ERROR("neverdead: [ASYNC-PSO] bytes inesperados en rexgpu-xenos+0x{:X}; no se parchea", kRvaTimeout);
+    s_done.store(true, std::memory_order_relaxed);
+    return;
+  }
+  DWORD old_protect = 0;
+  if (VirtualProtect(target, sizeof(kPatched), PAGE_EXECUTE_READWRITE, &old_protect) != 0) {
+    std::memcpy(target, kPatched, sizeof(kPatched));
+    DWORD ignored = 0;
+    VirtualProtect(target, sizeof(kPatched), old_protect, &ignored);
+    FlushInstructionCache(GetCurrentProcess(), target, sizeof(kPatched));
+    s_done.store(true, std::memory_order_relaxed);
+    REXLOG_INFO(
+        "neverdead: [ASYNC-PSO] Timeout en PipelineCache::EndSubmission reducido a {} ms en "
+        "rexgpu-xenos+0x{:X} (ejecutando 0xead90 y _Cnd_signal sin congelar el hilo principal)",
+        timeout_ms, kRvaTimeout);
+  }
+}
+//=============================================================================
+void NdEarlyInit() {
+  // ORDEN: primero los parches de paint_mode (para que el primer
+  // PaintFromUIThread acabe en modo 2), luego la captura del Presenter, el
+  // gating temprano y el hook de Present.
+  NdPatchInlinedPaintMode();
+  NdInstallSetPaintModeHook();
+  NdInstallPaintFromUIThreadHook();
+  NdInstallPaintAndPresentGate();
+  NdInstallPaintReturnHook();
+  NdInstallPresentGate();
+  NdSilenceXctdLog();
+  NdPatchAsyncPipelineCache();
+}
+void NdVdSetDisplayModeHook(PPCRegister& r3) {
+  const uint32_t mode = r3.u32;
+  if (mode < 0x10000u) {
+    return;
+  }
+  const uint32_t w = read_guest_be32(mode + 0);
+  const uint32_t h = read_guest_be32(mode + 4);
+  const uint32_t refresh_bits = read_guest_be32(mode + 20);
+  const float refresh = be_bits_to_float(refresh_bits);
+  // 62 FPS: el trabajador de vsync del SDK usa este refresh_rate.
+  // Ajustado a 62.0 Hz para evitar perder el vblank (eliminando picos de 40-53 ms).
+  const char* env = std::getenv("ND_FPS60");
+  const bool allow = !(env != nullptr && env[0] == '0');
+  if (allow && refresh > 0.0f && refresh < 59.0f) {
+    if (write_guest_be32(mode + 20, float_to_be_bits(62.0f))) {
+      REXLOG_INFO(
+          "neverdead: [VIDEO] refresh {:.1f} Hz -> 62 Hz ({}x{})", refresh, w, h);
+      return;
+    }
+  }
+  static float last_refresh = -1.0f;
+  if (refresh != last_refresh) {
+    last_refresh = refresh;
+    REXLOG_INFO(
+        "neverdead: [VIDEO] VdSetDisplayMode mode=0x{:08X} {}x{} refresh={:.1f}Hz",
+        mode, w, h, refresh);
+  }
+}
+void NdVdInitHook() {
+  const uint64_t n = g_vd_init_calls.fetch_add(1, std::memory_order_relaxed) + 1;
+  // Los parches ya se instalaron en OnPreSetup (antes del Presenter); aqui se
+  // reintentan los que dependen de modulos cargados tarde (rexgpu-xenos.dll).
+  NdEarlyInit();
+  if (n <= 4) {
+    REXLOG_INFO("neverdead: [MIDASM] VdInitializeEngines call #{} (site 0x826BC3FC)", n);
+  }
+}
+void NdVdSwapHook() {
+  const uint64_t n = g_vd_swap_calls.fetch_add(1, std::memory_order_relaxed) + 1;
+  // Asegurar parches en memoria en los primeros swaps
+  if (n <= 10) {
+    NdEarlyInit();
+  }
+  const auto now = std::chrono::steady_clock::now();
+  static const bool s_enable_thread_profiling = (std::getenv("ND_PROFILE_THREADS") != nullptr);
+  NdProcCounters cur_counters{};
+  if (s_enable_thread_profiling) {
+    cur_counters = nd_sample_counters();
+    if (g_threads.empty() ||
+        std::chrono::duration_cast<std::chrono::seconds>(now - g_threads_last_refresh).count() >=
+            2) {
+      nd_refresh_threads();
+    }
+    nd_sample_threads();
+  }
+  if (g_have_last) {
+    const double ms =
+        std::chrono::duration<double, std::milli>(now - g_last_swap).count();
+    g_sum_ms += ms;
+    if (ms > g_max_ms) {
+      g_max_ms = ms;
+    }
+    if (ms > 100.0) {
+      ++g_spike_100;
+      if (n > 1) {
+        fprintf(stderr, "[FRAME-SPIKE] VdSwap #%llu tardo %.1f ms (%.1f FPS inst)\n",
+                (unsigned long long)n, ms, 1000.0 / ms);
+        fflush(stderr);
+      }
+    }
+    if (ms > 500.0) {
+      ++g_spike_500;
+      REXLOG_INFO("neverdead: [FRAME] spike {:.1f} ms at frame {}", ms, n);
+    }
+    if (ms > 1000.0) {
+      ++g_spike_1000;
+    }
+    // Clasificacion del pico: CPU quemada vs disco vs espera, y que hilos.
+    if (ms > 200.0 && s_enable_thread_profiling) {
+      const double cpu_ms =
+          g_have_prev_counters
+              ? double(cur_counters.cpu_100ns - g_prev_counters.cpu_100ns) / 10000.0
+              : -1.0;
+      const uint64_t read_delta =
+          g_have_prev_counters ? cur_counters.read_bytes - g_prev_counters.read_bytes : 0;
+      const uint64_t read_ops =
+          g_have_prev_counters ? cur_counters.read_ops - g_prev_counters.read_ops : 0;
+      char top[256] = {};
+      size_t used = 0;
+      {
+        std::vector<std::pair<uint64_t, size_t>> deltas;
+        deltas.reserve(g_threads.size());
+        for (size_t i = 0; i < g_threads.size(); ++i) {
+          deltas.emplace_back(g_threads[i].cpu_100ns - g_threads[i].prev_cpu_100ns, i);
+        }
+        const size_t wanted = deltas.size() < 4 ? deltas.size() : 4;
+        std::partial_sort(deltas.begin(), deltas.begin() + wanted, deltas.end(),
+                          [](const std::pair<uint64_t, size_t>& a,
+                             const std::pair<uint64_t, size_t>& b) { return a.first > b.first; });
+        for (size_t k = 0; k < wanted && used + 48 < sizeof(top); ++k) {
+          const NdThreadCpu& t = g_threads[deltas[k].second];
+          const double thread_ms = double(deltas[k].first) / 10000.0;
+          if (thread_ms < 1.0) {
+            continue;
+          }
+          const int written = snprintf(top + used, sizeof(top) - used, "%s[%lu]=%.0fms ",
+                                       t.name[0] != '\0' ? t.name : "?",
+                                       (unsigned long)t.tid, thread_ms);
+          if (written <= 0) {
+            break;
+          }
+          used += size_t(written);
+        }
+      }
+      REXLOG_INFO(
+          "neverdead: [STALL] frame {} duro {:.1f} ms | cpu_proceso={:.1f} ms ({:.0f}%) "
+          "| disco_leido={:.2f} MB en {} ops | hilos: {}",
+          n, ms, cpu_ms, (ms > 0.0 && cpu_ms >= 0.0) ? 100.0 * cpu_ms / ms : 0.0,
+          double(read_delta) / (1024.0 * 1024.0), read_ops, top);
+    }
+    ++g_window_frames;
+  }
+  g_last_swap = now;
+  g_have_last = true;
+  g_prev_counters = cur_counters;
+  g_have_prev_counters = true;
+  // Resumen cada 300 frames (~5 s a 60 FPS). Un solo log, no inunda.
+  if ((n % 300) == 0) {
+    const double avg = g_window_frames ? (g_sum_ms / static_cast<double>(g_window_frames)) : 0.0;
+    REXLOG_INFO(
+        "neverdead: [FRAME] {} frames avg={:.2f} ms ({:.1f} FPS) max={:.1f} ms "
+        "spikes>100={} >500={} >1000={} | dxgi_present_fps={:.1f} "
+        "(allowed={} skipped={}) paint_mode={}",
+        g_window_frames, avg, avg > 0.0 ? 1000.0 / avg : 0.0, g_max_ms, g_spike_100,
+        g_spike_500, g_spike_1000, g_present_fps.load(std::memory_order_relaxed),
+        g_present_logged_allowed.load(std::memory_order_relaxed),
+        g_present_logged_skipped.load(std::memory_order_relaxed), nd_read_paint_mode());
+    g_sum_ms = 0.0;
+    g_max_ms = 0.0;
+    g_window_frames = 0;
+    g_spike_100 = 0;
+    g_spike_500 = 0;
+    g_spike_1000 = 0;
+  }
+}
+//=============================================================================
+//=============================================================================
+// Control de Tasa de Refresco y Menu de Configuracion UI (F1)
+//=============================================================================
+static std::atomic<float> g_fps_target{0.0f}; // 0.0f = Unlocked (72+ FPS)
+static std::atomic<bool> g_fps_mode_initialized{false};
+static std::atomic<bool> g_config_ui_open{false};
+static HWND g_config_hwnd = nullptr;
+static HBRUSH g_cfg_dark_bg = nullptr;
+static HBRUSH g_cfg_dark_ctrl = nullptr;
+
+enum {
+  IDC_CFG_COMBO_FPS = 1001,
+  IDC_CFG_COMBO_WND,
+  IDC_CFG_COMBO_POST,
+  IDC_CFG_CHK_SSAO,
+  IDC_CFG_CHK_MBLUR,
+  IDC_CFG_CHK_SHADOW,
+  IDC_CFG_CHK_FOG,
+  IDC_CFG_CHK_EXPOSURE,
+  IDC_CFG_BTN_APPLY,
+  IDC_CFG_BTN_EXIT_DESKTOP,
+};
+
+static void NdUpdateTomlSetting(const char* key, const char* val) {
+  auto update_path = [](const char* path, const char* k, const char* v) {
+    FILE* f = fopen(path, "r");
+    if (!f) return;
+    char buf[16384];
+    size_t n = fread(buf, 1, sizeof(buf) - 1, f);
+    fclose(f);
+    buf[n] = '\0';
+    std::string content(buf);
+    std::string target = std::string(k) + " = ";
+    size_t pos = content.find(target);
+    if (pos != std::string::npos) {
+      size_t end = content.find('\n', pos);
+      if (end == std::string::npos) end = content.size();
+      content.replace(pos + target.size(), end - (pos + target.size()), std::string("\"") + v + "\"");
+      f = fopen(path, "w");
+      if (f) {
+        fwrite(content.data(), 1, content.size(), f);
+        fclose(f);
+      }
+    }
+  };
+  update_path("neverdead.toml", key, val);
+  update_path("build_clang/neverdead.toml", key, val);
+}
+
+static void NdCreateConfigControls(HWND hwnd) {
+  HFONT hFont = CreateFontW(16, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
+                            DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
+                            CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
+  HFONT hFontBold = CreateFontW(17, 0, 0, 0, FW_BOLD, FALSE, FALSE, FALSE,
+                                DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
+                                CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
+
+  auto set_font = [&](HWND ctrl, HFONT f) {
+    SendMessageW(ctrl, WM_SETFONT, reinterpret_cast<WPARAM>(f), TRUE);
+  };
+
+  // Titulo y Subtitulo
+  HWND hTitle = CreateWindowW(L"STATIC", L"NeverDead PC Recomp - Configuración & Optimización (F1)",
+                              WS_CHILD | WS_VISIBLE, 20, 15, 420, 24, hwnd, nullptr, nullptr, nullptr);
+  set_font(hTitle, hFontBold);
+
+  HWND hSub = CreateWindowW(L"STATIC", L"Ajustes en vivo: los cambios aplican de inmediato en tiempo real.",
+                            WS_CHILD | WS_VISIBLE, 20, 40, 420, 20, hwnd, nullptr, nullptr, nullptr);
+  set_font(hSub, hFont);
+
+  // Grupo 1: Framerate
+  HWND grp1 = CreateWindowW(L"BUTTON", L" Límite de Framerate ",
+                            WS_CHILD | WS_VISIBLE | BS_GROUPBOX, 20, 65, 410, 65, hwnd, nullptr, nullptr, nullptr);
+  set_font(grp1, hFont);
+  HWND lblFps = CreateWindowW(L"STATIC", L"Tasa de cuadros:",
+                              WS_CHILD | WS_VISIBLE, 35, 92, 130, 20, hwnd, nullptr, nullptr, nullptr);
+  set_font(lblFps, hFont);
+  HWND cbFps = CreateWindowExW(0, L"COMBOBOX", nullptr,
+                               WS_CHILD | WS_VISIBLE | CBS_DROPDOWNLIST | WS_VSCROLL,
+                               175, 88, 240, 160, hwnd, reinterpret_cast<HMENU>(IDC_CFG_COMBO_FPS), nullptr, nullptr);
+  set_font(cbFps, hFont);
+  SendMessageW(cbFps, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"30 FPS (Modo Consola / Eficiencia)"));
+  SendMessageW(cbFps, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"60 FPS (Estándar PC Fluido)"));
+  SendMessageW(cbFps, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"90 FPS (Alta Tasa de Refresco)"));
+  SendMessageW(cbFps, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"120 FPS (Tasa Ultra Alta)"));
+  SendMessageW(cbFps, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"Ilimitado (0.0f - Máxima Fluidez)"));
+
+  float cur_fps = g_fps_target.load(std::memory_order_relaxed);
+  int sel_fps = 4; // Default unlocked
+  if (cur_fps > 0.0f && cur_fps <= 35.0f) sel_fps = 0;
+  else if (cur_fps > 35.0f && cur_fps <= 65.0f) sel_fps = 1;
+  else if (cur_fps > 65.0f && cur_fps <= 95.0f) sel_fps = 2;
+  else if (cur_fps > 95.0f && cur_fps <= 130.0f) sel_fps = 3;
+  SendMessageW(cbFps, CB_SETCURSEL, sel_fps, 0);
+
+  // Grupo 2: Pantalla y Escalado
+  HWND grp2 = CreateWindowW(L"BUTTON", L" Pantalla y Escalado ",
+                            WS_CHILD | WS_VISIBLE | BS_GROUPBOX, 20, 140, 410, 105, hwnd, nullptr, nullptr, nullptr);
+  set_font(grp2, hFont);
+  HWND lblWnd = CreateWindowW(L"STATIC", L"Modo de Ventana:",
+                              WS_CHILD | WS_VISIBLE, 35, 167, 130, 20, hwnd, nullptr, nullptr, nullptr);
+  set_font(lblWnd, hFont);
+  HWND cbWnd = CreateWindowExW(0, L"COMBOBOX", nullptr,
+                               WS_CHILD | WS_VISIBLE | CBS_DROPDOWNLIST | WS_VSCROLL,
+                               175, 163, 240, 120, hwnd, reinterpret_cast<HMENU>(IDC_CFG_COMBO_WND), nullptr, nullptr);
+  set_font(cbWnd, hFont);
+  SendMessageW(cbWnd, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"Ventana 720p (1280x720)"));
+  SendMessageW(cbWnd, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"Ventana 1080p (1920x1080)"));
+  SendMessageW(cbWnd, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"Pantalla Completa Sin Bordes"));
+  SendMessageW(cbWnd, CB_SETCURSEL, 0, 0);
+
+  HWND lblPost = CreateWindowW(L"STATIC", L"Post-Procesado / Nitidez:",
+                               WS_CHILD | WS_VISIBLE, 35, 207, 135, 20, hwnd, nullptr, nullptr, nullptr);
+  set_font(lblPost, hFont);
+  HWND cbPost = CreateWindowExW(0, L"COMBOBOX", nullptr,
+                                WS_CHILD | WS_VISIBLE | CBS_DROPDOWNLIST | WS_VSCROLL,
+                                175, 203, 240, 120, hwnd, reinterpret_cast<HMENU>(IDC_CFG_COMBO_POST), nullptr, nullptr);
+  set_font(cbPost, hFont);
+  SendMessageW(cbPost, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"Ninguno (none - Máx Rendimiento iGPU)"));
+  SendMessageW(cbPost, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"FXAA (fxaa - Suavizado rápido)"));
+  SendMessageW(cbPost, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"FXAA Extreme (fxaa_extreme)"));
+  SendMessageW(cbPost, CB_SETCURSEL, 0, 0);
+
+  // Grupo 3: Modo Laptop / iGPU
+  HWND grp3 = CreateWindowW(L"BUTTON", L" Modo Laptop / Gráfica Integrada (iGPU) ",
+                            WS_CHILD | WS_VISIBLE | BS_GROUPBOX, 20, 255, 410, 185, hwnd, nullptr, nullptr, nullptr);
+  set_font(grp3, hFont);
+
+  HWND chkSSAO = CreateWindowW(L"BUTTON", L"Desactivar Oclusión Ambiental (SSAO - 0x82B347EB)",
+                               WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX,
+                               35, 282, 380, 22, hwnd, reinterpret_cast<HMENU>(IDC_CFG_CHK_SSAO), nullptr, nullptr);
+  set_font(chkSSAO, hFont);
+  if (read_guest_u8(0x82B347EB) == 0 && g_translate != nullptr) {
+    SendMessageW(chkSSAO, BM_SETCHECK, BST_CHECKED, 0);
+  }
+
+  HWND chkMBlur = CreateWindowW(L"BUTTON", L"Desactivar Motion Blur (0x82B347EF)",
+                                WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX,
+                                35, 312, 380, 22, hwnd, reinterpret_cast<HMENU>(IDC_CFG_CHK_MBLUR), nullptr, nullptr);
+  set_font(chkMBlur, hFont);
+  if (read_guest_u8(0x82B347EF) == 0 && g_translate != nullptr) {
+    SendMessageW(chkMBlur, BM_SETCHECK, BST_CHECKED, 0);
+  }
+
+  HWND chkShadow = CreateWindowW(L"BUTTON", L"Sombras en Calidad Reducida / Low (0x82B347E8)",
+                                 WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX,
+                                 35, 342, 380, 22, hwnd, reinterpret_cast<HMENU>(IDC_CFG_CHK_SHADOW), nullptr, nullptr);
+  set_font(chkShadow, hFont);
+  if (read_guest_u8(0x82B347E8) == 0 && g_translate != nullptr) {
+    SendMessageW(chkShadow, BM_SETCHECK, BST_CHECKED, 0);
+  }
+
+  HWND chkFog = CreateWindowW(L"BUTTON", L"Desactivar Niebla Volumétrica / Fog (0x8213A3E8)",
+                              WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX,
+                              35, 372, 380, 22, hwnd, reinterpret_cast<HMENU>(IDC_CFG_CHK_FOG), nullptr, nullptr);
+  set_font(chkFog, hFont);
+  if (read_guest_u8(0x8213A3E8) == 0 && g_translate != nullptr) {
+    SendMessageW(chkFog, BM_SETCHECK, BST_CHECKED, 0);
+  }
+
+  HWND chkExp = CreateWindowW(L"BUTTON", L"Desactivar Exposición Dinámica (0x8213A67C)",
+                              WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX,
+                              35, 402, 380, 22, hwnd, reinterpret_cast<HMENU>(IDC_CFG_CHK_EXPOSURE), nullptr, nullptr);
+  set_font(chkExp, hFont);
+  if (read_guest_u8(0x8213A67C) == 0 && g_translate != nullptr) {
+    SendMessageW(chkExp, BM_SETCHECK, BST_CHECKED, 0);
+  }
+
+  // Botones
+  HWND btnApply = CreateWindowW(L"BUTTON", L"Cerrar Menú (F1)",
+                                WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
+                                45, 455, 160, 36, hwnd, reinterpret_cast<HMENU>(IDC_CFG_BTN_APPLY), nullptr, nullptr);
+  set_font(btnApply, hFontBold);
+
+  HWND btnExit = CreateWindowW(L"BUTTON", L"Salir al Escritorio",
+                               WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
+                               245, 455, 160, 36, hwnd, reinterpret_cast<HMENU>(IDC_CFG_BTN_EXIT_DESKTOP), nullptr, nullptr);
+  set_font(btnExit, hFontBold);
+}
+
+static LRESULT CALLBACK NdConfigWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
+  switch (msg) {
+    case WM_CTLCOLORSTATIC:
+    case WM_CTLCOLORDLG: {
+      HDC hdc = reinterpret_cast<HDC>(wParam);
+      SetTextColor(hdc, RGB(230, 230, 235));
+      SetBkColor(hdc, RGB(28, 28, 32));
+      return reinterpret_cast<LRESULT>(g_cfg_dark_bg);
+    }
+    case WM_CTLCOLORBTN: {
+      HDC hdc = reinterpret_cast<HDC>(wParam);
+      SetTextColor(hdc, RGB(240, 240, 240));
+      SetBkColor(hdc, RGB(36, 36, 40));
+      return reinterpret_cast<LRESULT>(g_cfg_dark_bg);
+    }
+    case WM_COMMAND: {
+      int id = LOWORD(wParam);
+      int code = HIWORD(wParam);
+      if (id == IDC_CFG_BTN_EXIT_DESKTOP) {
+        REXLOG_INFO("neverdead: [CLEAN-EXIT] Salir al Escritorio pulsado desde UI de configuracion");
+        TerminateProcess(GetCurrentProcess(), 0);
+        return 0;
+      }
+      if (id == IDC_CFG_BTN_APPLY) {
+        DestroyWindow(hwnd);
+        return 0;
+      }
+      if (id == IDC_CFG_COMBO_FPS && code == CBN_SELCHANGE) {
+        HWND cb = reinterpret_cast<HWND>(lParam);
+        int idx = static_cast<int>(SendMessageW(cb, CB_GETCURSEL, 0, 0));
+        float target = 0.0f;
+        switch (idx) {
+          case 0: target = 30.0f; break;
+          case 1: target = 60.0f; break;
+          case 2: target = 90.0f; break;
+          case 3: target = 120.0f; break;
+          case 4: default: target = 0.0f; break;
+        }
+        g_fps_target.store(target, std::memory_order_relaxed);
+        write_guest_be32(0x82B31FBC, float_to_be_bits(target));
+        REXLOG_INFO("neverdead: [CONFIG-UI] Limite de framerate establecido a {:.1f} FPS", target);
+      }
+      if (id == IDC_CFG_COMBO_WND && code == CBN_SELCHANGE) {
+        HWND cb = reinterpret_cast<HWND>(lParam);
+        int idx = static_cast<int>(SendMessageW(cb, CB_GETCURSEL, 0, 0));
+        if (g_game_hwnd != nullptr) {
+          if (idx == 0) { // 720p
+            SetWindowLongPtrW(g_game_hwnd, GWL_STYLE, WS_OVERLAPPEDWINDOW | WS_VISIBLE);
+            RECT rc = {0, 0, 1280, 720};
+            AdjustWindowRect(&rc, WS_OVERLAPPEDWINDOW, FALSE);
+            int w = rc.right - rc.left;
+            int h = rc.bottom - rc.top;
+            int x = (GetSystemMetrics(SM_CXSCREEN) - w) / 2;
+            int y = (GetSystemMetrics(SM_CYSCREEN) - h) / 2;
+            SetWindowPos(g_game_hwnd, HWND_NOTOPMOST, x > 0 ? x : 0, y > 0 ? y : 0, w, h,
+                         SWP_FRAMECHANGED | SWP_SHOWWINDOW);
+            REXLOG_INFO("neverdead: [CONFIG-UI] Modo de pantalla: Ventana 720p");
+          } else if (idx == 1) { // 1080p
+            SetWindowLongPtrW(g_game_hwnd, GWL_STYLE, WS_OVERLAPPEDWINDOW | WS_VISIBLE);
+            RECT rc = {0, 0, 1920, 1080};
+            AdjustWindowRect(&rc, WS_OVERLAPPEDWINDOW, FALSE);
+            int w = rc.right - rc.left;
+            int h = rc.bottom - rc.top;
+            int x = (GetSystemMetrics(SM_CXSCREEN) - w) / 2;
+            int y = (GetSystemMetrics(SM_CYSCREEN) - h) / 2;
+            SetWindowPos(g_game_hwnd, HWND_NOTOPMOST, x > 0 ? x : 0, y > 0 ? y : 0, w, h,
+                         SWP_FRAMECHANGED | SWP_SHOWWINDOW);
+            REXLOG_INFO("neverdead: [CONFIG-UI] Modo de pantalla: Ventana 1080p");
+          } else if (idx == 2) { // Borderless
+            SetWindowLongPtrW(g_game_hwnd, GWL_STYLE, WS_POPUP | WS_VISIBLE);
+            int sw = GetSystemMetrics(SM_CXSCREEN);
+            int sh = GetSystemMetrics(SM_CYSCREEN);
+            SetWindowPos(g_game_hwnd, HWND_TOP, 0, 0, sw, sh,
+                         SWP_FRAMECHANGED | SWP_SHOWWINDOW);
+            REXLOG_INFO("neverdead: [CONFIG-UI] Modo de pantalla: Pantalla Completa Sin Bordes");
+          }
+        }
+      }
+      if (id == IDC_CFG_COMBO_POST && code == CBN_SELCHANGE) {
+        HWND cb = reinterpret_cast<HWND>(lParam);
+        int idx = static_cast<int>(SendMessageW(cb, CB_GETCURSEL, 0, 0));
+        const char* val = "none";
+        if (idx == 1) val = "fxaa";
+        else if (idx == 2) val = "fxaa_extreme";
+        NdUpdateTomlSetting("swap_post_effect", val);
+        REXLOG_INFO("neverdead: [CONFIG-UI] Post-procesado establecido a '{}' (guardado en TOML)", val);
+      }
+      if (id == IDC_CFG_CHK_SSAO && code == BN_CLICKED) {
+        LRESULT checked = SendMessageW(reinterpret_cast<HWND>(lParam), BM_GETCHECK, 0, 0);
+        uint8_t val = (checked == BST_CHECKED) ? 0 : 1; // Checked = desactivar
+        write_guest_u8(0x82B347EB, val);
+        REXLOG_INFO("neverdead: [CONFIG-UI] Ambient Occlusion (0x82B347EB) = {}", val);
+      }
+      if (id == IDC_CFG_CHK_MBLUR && code == BN_CLICKED) {
+        LRESULT checked = SendMessageW(reinterpret_cast<HWND>(lParam), BM_GETCHECK, 0, 0);
+        uint8_t val = (checked == BST_CHECKED) ? 0 : 1;
+        write_guest_u8(0x82B347EF, val);
+        REXLOG_INFO("neverdead: [CONFIG-UI] Motion Blur (0x82B347EF) = {}", val);
+      }
+      if (id == IDC_CFG_CHK_SHADOW && code == BN_CLICKED) {
+        LRESULT checked = SendMessageW(reinterpret_cast<HWND>(lParam), BM_GETCHECK, 0, 0);
+        uint8_t val = (checked == BST_CHECKED) ? 0 : 1; // 0 = Low, 1 = Normal
+        write_guest_u8(0x82B347E8, val);
+        REXLOG_INFO("neverdead: [CONFIG-UI] Shadow Quality (0x82B347E8) = {}", val);
+      }
+      if (id == IDC_CFG_CHK_FOG && code == BN_CLICKED) {
+        LRESULT checked = SendMessageW(reinterpret_cast<HWND>(lParam), BM_GETCHECK, 0, 0);
+        uint8_t val = (checked == BST_CHECKED) ? 0 : 1;
+        write_guest_u8(0x8213A3E8, val);
+        REXLOG_INFO("neverdead: [CONFIG-UI] Fog (0x8213A3E8) = {}", val);
+      }
+      if (id == IDC_CFG_CHK_EXPOSURE && code == BN_CLICKED) {
+        LRESULT checked = SendMessageW(reinterpret_cast<HWND>(lParam), BM_GETCHECK, 0, 0);
+        uint8_t val = (checked == BST_CHECKED) ? 0 : 1;
+        write_guest_u8(0x8213A67C, val);
+        REXLOG_INFO("neverdead: [CONFIG-UI] Dynamic Exposure (0x8213A67C) = {}", val);
+      }
+      break;
+    }
+    case WM_CLOSE: {
+      DestroyWindow(hwnd);
+      return 0;
+    }
+    case WM_DESTROY: {
+      g_config_hwnd = nullptr;
+      PostQuitMessage(0);
+      return 0;
+    }
+    default:
+      return DefWindowProcW(hwnd, msg, wParam, lParam);
+  }
+  return 0;
+}
+
+static void NdRunConfigUIDialog() {
+  if (g_cfg_dark_bg == nullptr) {
+    g_cfg_dark_bg = CreateSolidBrush(RGB(28, 28, 32));
+    g_cfg_dark_ctrl = CreateSolidBrush(RGB(40, 40, 44));
+  }
+  HINSTANCE hInst = GetModuleHandle(nullptr);
+  WNDCLASSEXW wc{};
+  wc.cbSize = sizeof(wc);
+  wc.style = CS_HREDRAW | CS_VREDRAW;
+  wc.lpfnWndProc = NdConfigWndProc;
+  wc.hInstance = hInst;
+  wc.hCursor = LoadCursor(nullptr, IDC_ARROW);
+  wc.hbrBackground = g_cfg_dark_bg;
+  wc.lpszClassName = L"NeverDeadConfigClass";
+  RegisterClassExW(&wc);
+
+  HWND hwnd = CreateWindowExW(
+      WS_EX_TOPMOST, L"NeverDeadConfigClass",
+      L"NeverDead - Configuración & Optimización (F1)",
+      WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX,
+      CW_USEDEFAULT, CW_USEDEFAULT, 465, 545,
+      nullptr, nullptr, hInst, nullptr);
+
+  if (hwnd == nullptr) {
+    g_config_ui_open.store(false, std::memory_order_release);
+    return;
+  }
+  g_config_hwnd = hwnd;
+
+  BOOL darkMode = TRUE;
+  DwmSetWindowAttribute(hwnd, 20 /* DWMWA_USE_IMMERSIVE_DARK_MODE */, &darkMode, sizeof(darkMode));
+
+  NdCreateConfigControls(hwnd);
+
+  ShowWindow(hwnd, SW_SHOW);
+  UpdateWindow(hwnd);
+  SetForegroundWindow(hwnd);
+
+  MSG msg{};
+  while (GetMessageW(&msg, nullptr, 0, 0) > 0) {
+    TranslateMessage(&msg);
+    DispatchMessageW(&msg);
+  }
+  g_config_ui_open.store(false, std::memory_order_release);
+}
+
+void NdOpenConfigUI() {
+  if (g_config_ui_open.exchange(true)) {
+    if (g_config_hwnd != nullptr && IsWindow(g_config_hwnd)) {
+      SetForegroundWindow(g_config_hwnd);
+    }
+    return;
+  }
+  std::thread ui_thread([]() {
+    NdRunConfigUIDialog();
+  });
+  ui_thread.detach();
+}
+
+static void NdSyncFpsClampMemory(float target) {
+  uint8_t* p = nd_translate_va(0x82B31FBC);
+  if (p != nullptr) {
+    write_guest_be32(0x82B31FBC, float_to_be_bits(target));
+  }
+}
+
+static void NdInitFpsMode() {
+  if (g_fps_mode_initialized.exchange(true)) {
+    return;
+  }
+  const char* env = std::getenv("ND_FPS_LIMIT");
+  if (env != nullptr && std::strcmp(env, "30") == 0) {
+    g_fps_target.store(30.0f, std::memory_order_relaxed);
+    NdSyncFpsClampMemory(30.0f);
+    REXLOG_INFO("neverdead: [FPS] Inicializado a 30 FPS por ND_FPS_LIMIT=30");
+  } else {
+    g_fps_target.store(0.0f, std::memory_order_relaxed);
+    NdSyncFpsClampMemory(0.0f);
+    REXLOG_INFO("neverdead: [FPS] Inicializado a modo Desbloqueado (Xenia Canary 72+ FPS / 0.0f) por defecto (F8 para 30 FPS, F1 para Menu)");
+  }
+}
+
+static void NdCheckFpsToggleKey() {
+  NdInitFpsMode();
+  static std::atomic<bool> s_f8_was_down{false};
+  SHORT f8_state = GetAsyncKeyState(0x77); // VK_F8
+  bool f8_down = (f8_state & 0x8000) != 0;
+  if (f8_down && !s_f8_was_down.exchange(true)) {
+    float cur = g_fps_target.load(std::memory_order_relaxed);
+    float next = (cur > 0.0f && cur <= 35.0f) ? 0.0f : 30.0f;
+    g_fps_target.store(next, std::memory_order_relaxed);
+    NdSyncFpsClampMemory(next);
+    REXLOG_INFO("neverdead: [FPS-TOGGLE] *** F8 PULSADO: Modo alternado a {} (0x82B31FBC sincronizado) ***",
+                (next <= 0.0f) ? "Desbloqueado (72+ FPS / 0.0f)" : "30 FPS (30.0f)");
+  } else if (!f8_down && s_f8_was_down.load(std::memory_order_relaxed)) {
+    s_f8_was_down.store(false, std::memory_order_relaxed);
+  }
+
+  static std::atomic<bool> s_f1_was_down{false};
+  SHORT f1_state = GetAsyncKeyState(VK_F1);
+  bool f1_down = (f1_state & 0x8000) != 0;
+  if (f1_down && !s_f1_was_down.exchange(true)) {
+    NdOpenConfigUI();
+  } else if (!f1_down && s_f1_was_down.load(std::memory_order_relaxed)) {
+    s_f1_was_down.store(false, std::memory_order_relaxed);
+  }
+}
+
+void NdForceIntervalOneHook(PPCRegister& r11) {
+  NdCheckFpsToggleKey();
+  const float target = g_fps_target.load(std::memory_order_relaxed);
+  // Intervalo de vblanks:
+  // - 30 FPS: Intervalo 2
+  // - 60/90/120/Ilimitado: Intervalo 0 (Present inmediato)
+  r11.u64 = (target > 0.0f && target <= 35.0f) ? 2 : 0;
+  NdSyncFpsClampMemory(target);
+}
+
+void NdAdjustRenderTimeoutHook(PPCRegister& r11) {
+  NdCheckFpsToggleKey();
+  const float target = g_fps_target.load(std::memory_order_relaxed);
+  r11.s64 = (target > 0.0f && target <= 35.0f) ? -333333 : -250000;
+}
+
+void NdSetFpsLimitHook(PPCRegister& f0) {
+  NdCheckFpsToggleKey();
+  const float target = g_fps_target.load(std::memory_order_relaxed);
+  f0.f64 = double(target);
+  f0.f32 = target;
+  NdSyncFpsClampMemory(target);
+}

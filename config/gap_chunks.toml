@@ -1,0 +1,45 @@
+# config/gap_chunks.toml - leaf entry points swallowed by a .pdata extent.
+#
+# These six addresses are real second entry points (vtable adjustor thunks or
+# leaf getters).  .pdata has no record for them, so the owning function's
+# extent covers them and the codegen never emits a callable body.  Any tail
+# call from outside the owner therefore becomes:
+#     FATAL: unresolved function 0x........ (no CallTarget in FunctionNode)
+#
+# They are declared as CHUNKS (the ReXGlue codegen's own mechanism for an
+# interior label reached from outside its owner): parent = the .pdata begin,
+# end = the real end of the block starting at that address (walked with the
+# same terminator rules as tools/build_seed_from_pdata.py: blr/bctr, an
+# unconditional branch out of the block, or a zero hole ends it).
+#
+# Source of every value: tools/build_seed_from_pdata.py (config/functions.toml),
+# chunk entries parent/end, cross-checked against NeverDead_base.exe bytes.
+# Do not add entries here that .pdata already declares standalone.
+
+[functions."0x8224CFF8"]
+parent = 2183450440   # 0x8224CF48
+# 0x8224D060, no 0x8224D048: el bloque alcanzado por `beq cr6,0x8224D048`
+# (0x8224D000) sigue hasta 0x8224D05C (blr) y el siguiente .pdata empieza
+# exactamente en 0x8224D060. Con end=0x8224D048 el codegen dejaba
+# "Unresolved conditional branch to 0x8224D048 from 0x8224D000".
+end = 2183450720      # 0x8224D060
+
+[functions."0x8225BCA0"]
+parent = 2183510784   # 0x8225BB00
+end = 2183511220      # 0x8225BCB4
+
+[functions."0x82504120"]
+parent = 2186297464   # 0x82504078
+end = 2186297660      # 0x8250413C
+
+[functions."0x82504220"]
+parent = 2186297728   # 0x82504180
+end = 2186297908      # 0x82504234
+
+[functions."0x82524760"]
+parent = 2186430184   # 0x825246E8
+end = 2186430324      # 0x82524774
+
+[functions."0x82564A40"]
+parent = 2186692552   # 0x825647C8
+end = 2186693284      # 0x82564AA4

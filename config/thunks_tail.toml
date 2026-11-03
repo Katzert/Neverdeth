@@ -1,0 +1,2424 @@
+# Tail-call thunks lis/addi/b en huecos tras terminador (no .pdata).
+# Generado por tools/scan_tail_thunks.py. Patron: lis r11,imm; addi r3,r11,imm; b target (12 bytes).
+# Sin declararlos, un salto indirecto del invitado provoca FATAL 'unregistered function'.
+
+[functions."0x821A41A4"]
+size = 0x0C
+name = "nd_tail_821A41A4"
+
+[functions."0x821A4B44"]
+size = 0x0C
+name = "nd_tail_821A4B44"
+
+[functions."0x821CBE18"]
+size = 0x0C
+name = "nd_tail_821CBE18"
+
+[functions."0x8220AC44"]
+size = 0x0C
+name = "nd_tail_8220AC44"
+
+[functions."0x8220C210"]
+size = 0x0C
+name = "nd_tail_8220C210"
+
+[functions."0x82218FE8"]
+size = 0x0C
+name = "nd_tail_82218FE8"
+
+[functions."0x8223EB90"]
+size = 0x0C
+name = "nd_tail_8223EB90"
+
+[functions."0x8223FB2C"]
+size = 0x0C
+name = "nd_tail_8223FB2C"
+
+[functions."0x82248A64"]
+size = 0x0C
+name = "nd_tail_82248A64"
+
+[functions."0x82296014"]
+size = 0x0C
+name = "nd_tail_82296014"
+
+[functions."0x822960F4"]
+size = 0x0C
+name = "nd_tail_822960F4"
+
+[functions."0x82296128"]
+size = 0x0C
+name = "nd_tail_82296128"
+
+[functions."0x822961FC"]
+size = 0x0C
+name = "nd_tail_822961FC"
+
+[functions."0x822962D0"]
+size = 0x0C
+name = "nd_tail_822962D0"
+
+[functions."0x822963A8"]
+size = 0x0C
+name = "nd_tail_822963A8"
+
+[functions."0x82296480"]
+size = 0x0C
+name = "nd_tail_82296480"
+
+[functions."0x82296558"]
+size = 0x0C
+name = "nd_tail_82296558"
+
+[functions."0x822C5A70"]
+size = 0x0C
+name = "nd_tail_822C5A70"
+
+[functions."0x822CBF28"]
+size = 0x0C
+name = "nd_tail_822CBF28"
+
+[functions."0x822CBF98"]
+size = 0x0C
+name = "nd_tail_822CBF98"
+
+[functions."0x822CD4A0"]
+size = 0x0C
+name = "nd_tail_822CD4A0"
+
+[functions."0x822CDB5C"]
+size = 0x0C
+name = "nd_tail_822CDB5C"
+
+[functions."0x822CDD4C"]
+size = 0x0C
+name = "nd_tail_822CDD4C"
+
+[functions."0x822D6344"]
+size = 0x0C
+name = "nd_tail_822D6344"
+
+[functions."0x822D8490"]
+size = 0x0C
+name = "nd_tail_822D8490"
+
+[functions."0x822D84B0"]
+size = 0x0C
+name = "nd_tail_822D84B0"
+
+[functions."0x822D8960"]
+size = 0x0C
+name = "nd_tail_822D8960"
+
+[functions."0x822D8A60"]
+size = 0x0C
+name = "nd_tail_822D8A60"
+
+[functions."0x822DFB34"]
+size = 0x0C
+name = "nd_tail_822DFB34"
+
+[functions."0x822E1DEC"]
+size = 0x0C
+name = "nd_tail_822E1DEC"
+
+[functions."0x822E83BC"]
+size = 0x0C
+name = "nd_tail_822E83BC"
+
+[functions."0x822E8428"]
+size = 0x0C
+name = "nd_tail_822E8428"
+
+[functions."0x822E849C"]
+size = 0x0C
+name = "nd_tail_822E849C"
+
+[functions."0x822E9B24"]
+size = 0x0C
+name = "nd_tail_822E9B24"
+
+[functions."0x822E9BEC"]
+size = 0x0C
+name = "nd_tail_822E9BEC"
+
+[functions."0x822ECCB4"]
+size = 0x0C
+name = "nd_tail_822ECCB4"
+
+[functions."0x822ECD0C"]
+size = 0x0C
+name = "nd_tail_822ECD0C"
+
+[functions."0x822ECDC4"]
+size = 0x0C
+name = "nd_tail_822ECDC4"
+
+[functions."0x822ECE38"]
+size = 0x0C
+name = "nd_tail_822ECE38"
+
+[functions."0x822ECEB4"]
+size = 0x0C
+name = "nd_tail_822ECEB4"
+
+[functions."0x822ECF28"]
+size = 0x0C
+name = "nd_tail_822ECF28"
+
+[functions."0x822ECF9C"]
+size = 0x0C
+name = "nd_tail_822ECF9C"
+
+[functions."0x822ECFF4"]
+size = 0x0C
+name = "nd_tail_822ECFF4"
+
+[functions."0x822ED068"]
+size = 0x0C
+name = "nd_tail_822ED068"
+
+[functions."0x822ED0BC"]
+size = 0x0C
+name = "nd_tail_822ED0BC"
+
+[functions."0x822ED114"]
+size = 0x0C
+name = "nd_tail_822ED114"
+
+[functions."0x822ED16C"]
+size = 0x0C
+name = "nd_tail_822ED16C"
+
+[functions."0x822ED1C4"]
+size = 0x0C
+name = "nd_tail_822ED1C4"
+
+[functions."0x822ED21C"]
+size = 0x0C
+name = "nd_tail_822ED21C"
+
+[functions."0x822ED294"]
+size = 0x0C
+name = "nd_tail_822ED294"
+
+[functions."0x822ED2B8"]
+size = 0x0C
+name = "nd_tail_822ED2B8"
+
+[functions."0x822ED30C"]
+size = 0x0C
+name = "nd_tail_822ED30C"
+
+[functions."0x822ED358"]
+size = 0x0C
+name = "nd_tail_822ED358"
+
+[functions."0x822ED390"]
+size = 0x0C
+name = "nd_tail_822ED390"
+
+[functions."0x822ED39C"]
+size = 0x0C
+name = "nd_tail_822ED39C"
+
+[functions."0x822EDA20"]
+size = 0x0C
+name = "nd_tail_822EDA20"
+
+[functions."0x822F15E0"]
+size = 0x0C
+name = "nd_tail_822F15E0"
+
+[functions."0x822F1690"]
+size = 0x0C
+name = "nd_tail_822F1690"
+
+[functions."0x822F1760"]
+size = 0x0C
+name = "nd_tail_822F1760"
+
+[functions."0x822F1828"]
+size = 0x0C
+name = "nd_tail_822F1828"
+
+[functions."0x822F18F0"]
+size = 0x0C
+name = "nd_tail_822F18F0"
+
+[functions."0x822F19A4"]
+size = 0x0C
+name = "nd_tail_822F19A4"
+
+[functions."0x822F1AD4"]
+size = 0x0C
+name = "nd_tail_822F1AD4"
+
+[functions."0x822F1B84"]
+size = 0x0C
+name = "nd_tail_822F1B84"
+
+[functions."0x822F1C30"]
+size = 0x0C
+name = "nd_tail_822F1C30"
+
+[functions."0x822F3F6C"]
+size = 0x0C
+name = "nd_tail_822F3F6C"
+
+[functions."0x822F4034"]
+size = 0x0C
+name = "nd_tail_822F4034"
+
+[functions."0x822F411C"]
+size = 0x0C
+name = "nd_tail_822F411C"
+
+[functions."0x822F41FC"]
+size = 0x0C
+name = "nd_tail_822F41FC"
+
+[functions."0x822F42E0"]
+size = 0x0C
+name = "nd_tail_822F42E0"
+
+[functions."0x822F43B4"]
+size = 0x0C
+name = "nd_tail_822F43B4"
+
+[functions."0x822F447C"]
+size = 0x0C
+name = "nd_tail_822F447C"
+
+[functions."0x822F5B80"]
+size = 0x0C
+name = "nd_tail_822F5B80"
+
+[functions."0x822F5BD4"]
+size = 0x0C
+name = "nd_tail_822F5BD4"
+
+[functions."0x822F5C2C"]
+size = 0x0C
+name = "nd_tail_822F5C2C"
+
+[functions."0x822F5CAC"]
+size = 0x0C
+name = "nd_tail_822F5CAC"
+
+[functions."0x8230E3AC"]
+size = 0x0C
+name = "nd_tail_8230E3AC"
+
+[functions."0x8232C74C"]
+size = 0x0C
+name = "nd_tail_8232C74C"
+
+[functions."0x82332630"]
+size = 0x0C
+name = "nd_tail_82332630"
+
+[functions."0x82352510"]
+size = 0x0C
+name = "nd_tail_82352510"
+
+[functions."0x823529E8"]
+size = 0x0C
+name = "nd_tail_823529E8"
+
+[functions."0x82359C44"]
+size = 0x0C
+name = "nd_tail_82359C44"
+
+[functions."0x82359F94"]
+size = 0x0C
+name = "nd_tail_82359F94"
+
+[functions."0x823650EC"]
+size = 0x0C
+name = "nd_tail_823650EC"
+
+[functions."0x82365144"]
+size = 0x0C
+name = "nd_tail_82365144"
+
+[functions."0x82376344"]
+size = 0x0C
+name = "nd_tail_82376344"
+
+[functions."0x8239B628"]
+size = 0x0C
+name = "nd_tail_8239B628"
+
+[functions."0x8239B6DC"]
+size = 0x0C
+name = "nd_tail_8239B6DC"
+
+[functions."0x823B1160"]
+size = 0x0C
+name = "nd_tail_823B1160"
+
+[functions."0x823B2EF8"]
+size = 0x0C
+name = "nd_tail_823B2EF8"
+
+[functions."0x823C8DB0"]
+size = 0x0C
+name = "nd_tail_823C8DB0"
+
+[functions."0x823C8E70"]
+size = 0x0C
+name = "nd_tail_823C8E70"
+
+[functions."0x823CE288"]
+size = 0x0C
+name = "nd_tail_823CE288"
+
+[functions."0x823E7494"]
+size = 0x0C
+name = "nd_tail_823E7494"
+
+[functions."0x823EB5AC"]
+size = 0x0C
+name = "nd_tail_823EB5AC"
+
+[functions."0x823ED28C"]
+size = 0x0C
+name = "nd_tail_823ED28C"
+
+[functions."0x8242D964"]
+size = 0x0C
+name = "nd_tail_8242D964"
+
+[functions."0x8242F1FC"]
+size = 0x0C
+name = "nd_tail_8242F1FC"
+
+[functions."0x824306CC"]
+size = 0x0C
+name = "nd_tail_824306CC"
+
+[functions."0x82431BA0"]
+size = 0x0C
+name = "nd_tail_82431BA0"
+
+[functions."0x82434844"]
+size = 0x0C
+name = "nd_tail_82434844"
+
+[functions."0x824DBEFC"]
+size = 0x0C
+name = "nd_tail_824DBEFC"
+
+[functions."0x824DC8D4"]
+size = 0x0C
+name = "nd_tail_824DC8D4"
+
+[functions."0x824DCC3C"]
+size = 0x0C
+name = "nd_tail_824DCC3C"
+
+[functions."0x824DD200"]
+size = 0x0C
+name = "nd_tail_824DD200"
+
+[functions."0x824DE908"]
+size = 0x0C
+name = "nd_tail_824DE908"
+
+[functions."0x824E0A1C"]
+size = 0x0C
+name = "nd_tail_824E0A1C"
+
+[functions."0x824E2DD8"]
+size = 0x0C
+name = "nd_tail_824E2DD8"
+
+[functions."0x824E4D44"]
+size = 0x0C
+name = "nd_tail_824E4D44"
+
+[functions."0x824E5A70"]
+size = 0x0C
+name = "nd_tail_824E5A70"
+
+[functions."0x824E5B04"]
+size = 0x0C
+name = "nd_tail_824E5B04"
+
+[functions."0x824E5BC8"]
+size = 0x0C
+name = "nd_tail_824E5BC8"
+
+[functions."0x824E5C88"]
+size = 0x0C
+name = "nd_tail_824E5C88"
+
+[functions."0x824EA028"]
+size = 0x0C
+name = "nd_tail_824EA028"
+
+[functions."0x824EA664"]
+size = 0x0C
+name = "nd_tail_824EA664"
+
+[functions."0x824EA6DC"]
+size = 0x0C
+name = "nd_tail_824EA6DC"
+
+[functions."0x824EF6FC"]
+size = 0x0C
+name = "nd_tail_824EF6FC"
+
+[functions."0x824F1C08"]
+size = 0x0C
+name = "nd_tail_824F1C08"
+
+[functions."0x824F31D0"]
+size = 0x0C
+name = "nd_tail_824F31D0"
+
+[functions."0x825168C8"]
+size = 0x0C
+name = "nd_tail_825168C8"
+
+[functions."0x825EC420"]
+size = 0x0C
+name = "nd_tail_825EC420"
+
+[functions."0x8261A784"]
+size = 0x0C
+name = "nd_tail_8261A784"
+
+[functions."0x8261DAC4"]
+size = 0x0C
+name = "nd_tail_8261DAC4"
+
+[functions."0x8261E1CC"]
+size = 0x0C
+name = "nd_tail_8261E1CC"
+
+[functions."0x8261E2A8"]
+size = 0x0C
+name = "nd_tail_8261E2A8"
+
+[functions."0x8261E2C8"]
+size = 0x0C
+name = "nd_tail_8261E2C8"
+
+[functions."0x8261E3D8"]
+size = 0x0C
+name = "nd_tail_8261E3D8"
+
+[functions."0x8261E40C"]
+size = 0x0C
+name = "nd_tail_8261E40C"
+
+[functions."0x8261E4F0"]
+size = 0x0C
+name = "nd_tail_8261E4F0"
+
+[functions."0x8261E524"]
+size = 0x0C
+name = "nd_tail_8261E524"
+
+[functions."0x82621378"]
+size = 0x0C
+name = "nd_tail_82621378"
+
+[functions."0x82621614"]
+size = 0x0C
+name = "nd_tail_82621614"
+
+[functions."0x82621BC8"]
+size = 0x0C
+name = "nd_tail_82621BC8"
+
+[functions."0x82621BD4"]
+size = 0x0C
+name = "nd_tail_82621BD4"
+
+[functions."0x82621CA8"]
+size = 0x0C
+name = "nd_tail_82621CA8"
+
+[functions."0x82621D30"]
+size = 0x0C
+name = "nd_tail_82621D30"
+
+[functions."0x82621D64"]
+size = 0x0C
+name = "nd_tail_82621D64"
+
+[functions."0x82621E98"]
+size = 0x0C
+name = "nd_tail_82621E98"
+
+[functions."0x8262211C"]
+size = 0x0C
+name = "nd_tail_8262211C"
+
+[functions."0x826221C0"]
+size = 0x0C
+name = "nd_tail_826221C0"
+
+[functions."0x8262224C"]
+size = 0x0C
+name = "nd_tail_8262224C"
+
+[functions."0x8262226C"]
+size = 0x0C
+name = "nd_tail_8262226C"
+
+[functions."0x82622304"]
+size = 0x0C
+name = "nd_tail_82622304"
+
+[functions."0x82622324"]
+size = 0x0C
+name = "nd_tail_82622324"
+
+[functions."0x826225C8"]
+size = 0x0C
+name = "nd_tail_826225C8"
+
+[functions."0x826226C8"]
+size = 0x0C
+name = "nd_tail_826226C8"
+
+[functions."0x82622A2C"]
+size = 0x0C
+name = "nd_tail_82622A2C"
+
+[functions."0x82622ABC"]
+size = 0x0C
+name = "nd_tail_82622ABC"
+
+[functions."0x82622BCC"]
+size = 0x0C
+name = "nd_tail_82622BCC"
+
+[functions."0x82622C60"]
+size = 0x0C
+name = "nd_tail_82622C60"
+
+[functions."0x82622EBC"]
+size = 0x0C
+name = "nd_tail_82622EBC"
+
+[functions."0x82622EE0"]
+size = 0x0C
+name = "nd_tail_82622EE0"
+
+[functions."0x82622FB4"]
+size = 0x0C
+name = "nd_tail_82622FB4"
+
+[functions."0x82622FD4"]
+size = 0x0C
+name = "nd_tail_82622FD4"
+
+[functions."0x82623098"]
+size = 0x0C
+name = "nd_tail_82623098"
+
+[functions."0x826230B8"]
+size = 0x0C
+name = "nd_tail_826230B8"
+
+[functions."0x82623140"]
+size = 0x0C
+name = "nd_tail_82623140"
+
+[functions."0x82623160"]
+size = 0x0C
+name = "nd_tail_82623160"
+
+[functions."0x82623230"]
+size = 0x0C
+name = "nd_tail_82623230"
+
+[functions."0x826235B0"]
+size = 0x0C
+name = "nd_tail_826235B0"
+
+[functions."0x82624ABC"]
+size = 0x0C
+name = "nd_tail_82624ABC"
+
+[functions."0x826252EC"]
+size = 0x0C
+name = "nd_tail_826252EC"
+
+[functions."0x8262530C"]
+size = 0x0C
+name = "nd_tail_8262530C"
+
+[functions."0x826253B4"]
+size = 0x0C
+name = "nd_tail_826253B4"
+
+[functions."0x826253D4"]
+size = 0x0C
+name = "nd_tail_826253D4"
+
+[functions."0x8262549C"]
+size = 0x0C
+name = "nd_tail_8262549C"
+
+[functions."0x82625538"]
+size = 0x0C
+name = "nd_tail_82625538"
+
+[functions."0x826256AC"]
+size = 0x0C
+name = "nd_tail_826256AC"
+
+[functions."0x82625758"]
+size = 0x0C
+name = "nd_tail_82625758"
+
+[functions."0x82625764"]
+size = 0x0C
+name = "nd_tail_82625764"
+
+[functions."0x826257D8"]
+size = 0x0C
+name = "nd_tail_826257D8"
+
+[functions."0x826257E4"]
+size = 0x0C
+name = "nd_tail_826257E4"
+
+[functions."0x826258F4"]
+size = 0x0C
+name = "nd_tail_826258F4"
+
+[functions."0x8262591C"]
+size = 0x0C
+name = "nd_tail_8262591C"
+
+[functions."0x82625A60"]
+size = 0x0C
+name = "nd_tail_82625A60"
+
+[functions."0x82625B98"]
+size = 0x0C
+name = "nd_tail_82625B98"
+
+[functions."0x82625D14"]
+size = 0x0C
+name = "nd_tail_82625D14"
+
+[functions."0x82625DC4"]
+size = 0x0C
+name = "nd_tail_82625DC4"
+
+[functions."0x82625E74"]
+size = 0x0C
+name = "nd_tail_82625E74"
+
+[functions."0x82625F24"]
+size = 0x0C
+name = "nd_tail_82625F24"
+
+[functions."0x82625FBC"]
+size = 0x0C
+name = "nd_tail_82625FBC"
+
+[functions."0x82625FF0"]
+size = 0x0C
+name = "nd_tail_82625FF0"
+
+[functions."0x826262F0"]
+size = 0x0C
+name = "nd_tail_826262F0"
+
+[functions."0x82626310"]
+size = 0x0C
+name = "nd_tail_82626310"
+
+[functions."0x826263E0"]
+size = 0x0C
+name = "nd_tail_826263E0"
+
+[functions."0x82626400"]
+size = 0x0C
+name = "nd_tail_82626400"
+
+[functions."0x82626510"]
+size = 0x0C
+name = "nd_tail_82626510"
+
+[functions."0x8262651C"]
+size = 0x0C
+name = "nd_tail_8262651C"
+
+[functions."0x8262653C"]
+size = 0x0C
+name = "nd_tail_8262653C"
+
+[functions."0x826265D4"]
+size = 0x0C
+name = "nd_tail_826265D4"
+
+[functions."0x82627634"]
+size = 0x0C
+name = "nd_tail_82627634"
+
+[functions."0x826276C0"]
+size = 0x0C
+name = "nd_tail_826276C0"
+
+[functions."0x826276E0"]
+size = 0x0C
+name = "nd_tail_826276E0"
+
+[functions."0x82627770"]
+size = 0x0C
+name = "nd_tail_82627770"
+
+[functions."0x82627790"]
+size = 0x0C
+name = "nd_tail_82627790"
+
+[functions."0x82627834"]
+size = 0x0C
+name = "nd_tail_82627834"
+
+[functions."0x826278DC"]
+size = 0x0C
+name = "nd_tail_826278DC"
+
+[functions."0x82627984"]
+size = 0x0C
+name = "nd_tail_82627984"
+
+[functions."0x82627A04"]
+size = 0x0C
+name = "nd_tail_82627A04"
+
+[functions."0x82627AAC"]
+size = 0x0C
+name = "nd_tail_82627AAC"
+
+[functions."0x82667790"]
+size = 0x0C
+name = "nd_tail_82667790"
+
+[functions."0x82667850"]
+size = 0x0C
+name = "nd_tail_82667850"
+
+[functions."0x82667910"]
+size = 0x0C
+name = "nd_tail_82667910"
+
+[functions."0x826679D0"]
+size = 0x0C
+name = "nd_tail_826679D0"
+
+[functions."0x82667A60"]
+size = 0x0C
+name = "nd_tail_82667A60"
+
+[functions."0x82667EC8"]
+size = 0x0C
+name = "nd_tail_82667EC8"
+
+[functions."0x82667F68"]
+size = 0x0C
+name = "nd_tail_82667F68"
+
+[functions."0x82668008"]
+size = 0x0C
+name = "nd_tail_82668008"
+
+[functions."0x826680A8"]
+size = 0x0C
+name = "nd_tail_826680A8"
+
+[functions."0x82668148"]
+size = 0x0C
+name = "nd_tail_82668148"
+
+[functions."0x82668154"]
+size = 0x0C
+name = "nd_tail_82668154"
+
+[functions."0x82670998"]
+size = 0x0C
+name = "nd_tail_82670998"
+
+[functions."0x82670D38"]
+size = 0x0C
+name = "nd_tail_82670D38"
+
+[functions."0x82670E74"]
+size = 0x0C
+name = "nd_tail_82670E74"
+
+[functions."0x82671120"]
+size = 0x0C
+name = "nd_tail_82671120"
+
+[functions."0x82671144"]
+size = 0x0C
+name = "nd_tail_82671144"
+
+[functions."0x82671208"]
+size = 0x0C
+name = "nd_tail_82671208"
+
+[functions."0x8267122C"]
+size = 0x0C
+name = "nd_tail_8267122C"
+
+[functions."0x826712D0"]
+size = 0x0C
+name = "nd_tail_826712D0"
+
+[functions."0x826712F4"]
+size = 0x0C
+name = "nd_tail_826712F4"
+
+[functions."0x82671390"]
+size = 0x0C
+name = "nd_tail_82671390"
+
+[functions."0x826713B8"]
+size = 0x0C
+name = "nd_tail_826713B8"
+
+[functions."0x82671460"]
+size = 0x0C
+name = "nd_tail_82671460"
+
+[functions."0x82671488"]
+size = 0x0C
+name = "nd_tail_82671488"
+
+[functions."0x82671514"]
+size = 0x0C
+name = "nd_tail_82671514"
+
+[functions."0x8267153C"]
+size = 0x0C
+name = "nd_tail_8267153C"
+
+[functions."0x826715C4"]
+size = 0x0C
+name = "nd_tail_826715C4"
+
+[functions."0x826715EC"]
+size = 0x0C
+name = "nd_tail_826715EC"
+
+[functions."0x82671680"]
+size = 0x0C
+name = "nd_tail_82671680"
+
+[functions."0x826716A8"]
+size = 0x0C
+name = "nd_tail_826716A8"
+
+[functions."0x82671730"]
+size = 0x0C
+name = "nd_tail_82671730"
+
+[functions."0x82671764"]
+size = 0x0C
+name = "nd_tail_82671764"
+
+[functions."0x82671818"]
+size = 0x0C
+name = "nd_tail_82671818"
+
+[functions."0x82671840"]
+size = 0x0C
+name = "nd_tail_82671840"
+
+[functions."0x826718F8"]
+size = 0x0C
+name = "nd_tail_826718F8"
+
+[functions."0x82671920"]
+size = 0x0C
+name = "nd_tail_82671920"
+
+[functions."0x826719A8"]
+size = 0x0C
+name = "nd_tail_826719A8"
+
+[functions."0x826719DC"]
+size = 0x0C
+name = "nd_tail_826719DC"
+
+[functions."0x82671A60"]
+size = 0x0C
+name = "nd_tail_82671A60"
+
+[functions."0x82671A94"]
+size = 0x0C
+name = "nd_tail_82671A94"
+
+[functions."0x82672344"]
+size = 0x0C
+name = "nd_tail_82672344"
+
+[functions."0x826723D4"]
+size = 0x0C
+name = "nd_tail_826723D4"
+
+[functions."0x82672458"]
+size = 0x0C
+name = "nd_tail_82672458"
+
+[functions."0x8267250C"]
+size = 0x0C
+name = "nd_tail_8267250C"
+
+[functions."0x826725DC"]
+size = 0x0C
+name = "nd_tail_826725DC"
+
+[functions."0x826726A0"]
+size = 0x0C
+name = "nd_tail_826726A0"
+
+[functions."0x82672738"]
+size = 0x0C
+name = "nd_tail_82672738"
+
+[functions."0x826727E0"]
+size = 0x0C
+name = "nd_tail_826727E0"
+
+[functions."0x82672868"]
+size = 0x0C
+name = "nd_tail_82672868"
+
+[functions."0x8267296C"]
+size = 0x0C
+name = "nd_tail_8267296C"
+
+[functions."0x826729F0"]
+size = 0x0C
+name = "nd_tail_826729F0"
+
+[functions."0x82672ACC"]
+size = 0x0C
+name = "nd_tail_82672ACC"
+
+[functions."0x82672BC4"]
+size = 0x0C
+name = "nd_tail_82672BC4"
+
+[functions."0x82672E3C"]
+size = 0x0C
+name = "nd_tail_82672E3C"
+
+[functions."0x82672EB4"]
+size = 0x0C
+name = "nd_tail_82672EB4"
+
+[functions."0x82672F44"]
+size = 0x0C
+name = "nd_tail_82672F44"
+
+[functions."0x82672FD4"]
+size = 0x0C
+name = "nd_tail_82672FD4"
+
+[functions."0x82673064"]
+size = 0x0C
+name = "nd_tail_82673064"
+
+[functions."0x826730F4"]
+size = 0x0C
+name = "nd_tail_826730F4"
+
+[functions."0x826731D4"]
+size = 0x0C
+name = "nd_tail_826731D4"
+
+[functions."0x826732BC"]
+size = 0x0C
+name = "nd_tail_826732BC"
+
+[functions."0x826733A4"]
+size = 0x0C
+name = "nd_tail_826733A4"
+
+[functions."0x82673490"]
+size = 0x0C
+name = "nd_tail_82673490"
+
+[functions."0x826734A0"]
+size = 0x0C
+name = "nd_tail_826734A0"
+
+[functions."0x82673584"]
+size = 0x0C
+name = "nd_tail_82673584"
+
+[functions."0x82673620"]
+size = 0x0C
+name = "nd_tail_82673620"
+
+[functions."0x826736F8"]
+size = 0x0C
+name = "nd_tail_826736F8"
+
+[functions."0x8267C434"]
+size = 0x0C
+name = "nd_tail_8267C434"
+
+[functions."0x8267C4A4"]
+size = 0x0C
+name = "nd_tail_8267C4A4"
+
+[functions."0x8267C4B0"]
+size = 0x0C
+name = "nd_tail_8267C4B0"
+
+[functions."0x8267C544"]
+size = 0x0C
+name = "nd_tail_8267C544"
+
+[functions."0x8267C550"]
+size = 0x0C
+name = "nd_tail_8267C550"
+
+[functions."0x8267C5E4"]
+size = 0x0C
+name = "nd_tail_8267C5E4"
+
+[functions."0x8267C5F0"]
+size = 0x0C
+name = "nd_tail_8267C5F0"
+
+[functions."0x8267C6D4"]
+size = 0x0C
+name = "nd_tail_8267C6D4"
+
+[functions."0x8267C6F8"]
+size = 0x0C
+name = "nd_tail_8267C6F8"
+
+[functions."0x8267C7E8"]
+size = 0x0C
+name = "nd_tail_8267C7E8"
+
+[functions."0x8267C908"]
+size = 0x0C
+name = "nd_tail_8267C908"
+
+[functions."0x8267C9C8"]
+size = 0x0C
+name = "nd_tail_8267C9C8"
+
+[functions."0x8267CAA4"]
+size = 0x0C
+name = "nd_tail_8267CAA4"
+
+[functions."0x8267CAD8"]
+size = 0x0C
+name = "nd_tail_8267CAD8"
+
+[functions."0x8267CB94"]
+size = 0x0C
+name = "nd_tail_8267CB94"
+
+[functions."0x8267CC38"]
+size = 0x0C
+name = "nd_tail_8267CC38"
+
+[functions."0x8267CCF8"]
+size = 0x0C
+name = "nd_tail_8267CCF8"
+
+[functions."0x8267CE40"]
+size = 0x0C
+name = "nd_tail_8267CE40"
+
+[functions."0x8267CF6C"]
+size = 0x0C
+name = "nd_tail_8267CF6C"
+
+[functions."0x8267CFF8"]
+size = 0x0C
+name = "nd_tail_8267CFF8"
+
+[functions."0x8267D004"]
+size = 0x0C
+name = "nd_tail_8267D004"
+
+[functions."0x8267D0A8"]
+size = 0x0C
+name = "nd_tail_8267D0A8"
+
+[functions."0x8267D1C8"]
+size = 0x0C
+name = "nd_tail_8267D1C8"
+
+[functions."0x8267D2A0"]
+size = 0x0C
+name = "nd_tail_8267D2A0"
+
+[functions."0x82684474"]
+size = 0x0C
+name = "nd_tail_82684474"
+
+[functions."0x826845E0"]
+size = 0x0C
+name = "nd_tail_826845E0"
+
+[functions."0x826847D4"]
+size = 0x0C
+name = "nd_tail_826847D4"
+
+[functions."0x82684A9C"]
+size = 0x0C
+name = "nd_tail_82684A9C"
+
+[functions."0x82684B9C"]
+size = 0x0C
+name = "nd_tail_82684B9C"
+
+[functions."0x82684BB4"]
+size = 0x0C
+name = "nd_tail_82684BB4"
+
+[functions."0x82684CDC"]
+size = 0x0C
+name = "nd_tail_82684CDC"
+
+[functions."0x82684CF4"]
+size = 0x0C
+name = "nd_tail_82684CF4"
+
+[functions."0x82684DF0"]
+size = 0x0C
+name = "nd_tail_82684DF0"
+
+[functions."0x82684F28"]
+size = 0x0C
+name = "nd_tail_82684F28"
+
+[functions."0x82684FC4"]
+size = 0x0C
+name = "nd_tail_82684FC4"
+
+[functions."0x82685018"]
+size = 0x0C
+name = "nd_tail_82685018"
+
+[functions."0x82685068"]
+size = 0x0C
+name = "nd_tail_82685068"
+
+[functions."0x826850B8"]
+size = 0x0C
+name = "nd_tail_826850B8"
+
+[functions."0x826852CC"]
+size = 0x0C
+name = "nd_tail_826852CC"
+
+[functions."0x826853BC"]
+size = 0x0C
+name = "nd_tail_826853BC"
+
+[functions."0x82685558"]
+size = 0x0C
+name = "nd_tail_82685558"
+
+[functions."0x826855D0"]
+size = 0x0C
+name = "nd_tail_826855D0"
+
+[functions."0x826855DC"]
+size = 0x0C
+name = "nd_tail_826855DC"
+
+[functions."0x82685658"]
+size = 0x0C
+name = "nd_tail_82685658"
+
+[functions."0x82685664"]
+size = 0x0C
+name = "nd_tail_82685664"
+
+[functions."0x826856E0"]
+size = 0x0C
+name = "nd_tail_826856E0"
+
+[functions."0x826856EC"]
+size = 0x0C
+name = "nd_tail_826856EC"
+
+[functions."0x82685758"]
+size = 0x0C
+name = "nd_tail_82685758"
+
+[functions."0x82685764"]
+size = 0x0C
+name = "nd_tail_82685764"
+
+[functions."0x826857D0"]
+size = 0x0C
+name = "nd_tail_826857D0"
+
+[functions."0x826857DC"]
+size = 0x0C
+name = "nd_tail_826857DC"
+
+[functions."0x82685848"]
+size = 0x0C
+name = "nd_tail_82685848"
+
+[functions."0x82685854"]
+size = 0x0C
+name = "nd_tail_82685854"
+
+[functions."0x826858EC"]
+size = 0x0C
+name = "nd_tail_826858EC"
+
+[functions."0x82685A48"]
+size = 0x0C
+name = "nd_tail_82685A48"
+
+[functions."0x82685BC8"]
+size = 0x0C
+name = "nd_tail_82685BC8"
+
+[functions."0x82685D34"]
+size = 0x0C
+name = "nd_tail_82685D34"
+
+[functions."0x82685E94"]
+size = 0x0C
+name = "nd_tail_82685E94"
+
+[functions."0x82685F20"]
+size = 0x0C
+name = "nd_tail_82685F20"
+
+[functions."0x82686348"]
+size = 0x0C
+name = "nd_tail_82686348"
+
+[functions."0x826863D0"]
+size = 0x0C
+name = "nd_tail_826863D0"
+
+[functions."0x8268646C"]
+size = 0x0C
+name = "nd_tail_8268646C"
+
+[functions."0x82686504"]
+size = 0x0C
+name = "nd_tail_82686504"
+
+[functions."0x8268659C"]
+size = 0x0C
+name = "nd_tail_8268659C"
+
+[functions."0x82686630"]
+size = 0x0C
+name = "nd_tail_82686630"
+
+[functions."0x82686650"]
+size = 0x0C
+name = "nd_tail_82686650"
+
+[functions."0x8268DC84"]
+size = 0x0C
+name = "nd_tail_8268DC84"
+
+[functions."0x8269BA54"]
+size = 0x0C
+name = "nd_tail_8269BA54"
+
+[functions."0x8269C350"]
+size = 0x0C
+name = "nd_tail_8269C350"
+
+[functions."0x826BC1B8"]
+size = 0x0C
+name = "nd_tail_826BC1B8"
+
+[functions."0x826BC240"]
+size = 0x0C
+name = "nd_tail_826BC240"
+
+[functions."0x826BD898"]
+size = 0x0C
+name = "nd_tail_826BD898"
+
+[functions."0x826BD8A4"]
+size = 0x0C
+name = "nd_tail_826BD8A4"
+
+[functions."0x826C6548"]
+size = 0x0C
+name = "nd_tail_826C6548"
+
+[functions."0x8272998C"]
+size = 0x0C
+name = "nd_tail_8272998C"
+
+[functions."0x8272BEE4"]
+size = 0x0C
+name = "nd_tail_8272BEE4"
+
+[functions."0x827781D0"]
+size = 0x0C
+name = "nd_tail_827781D0"
+
+[functions."0x827A7938"]
+size = 0x0C
+name = "nd_tail_827A7938"
+
+[functions."0x827A7948"]
+size = 0x0C
+name = "nd_tail_827A7948"
+
+[functions."0x827A79E0"]
+size = 0x0C
+name = "nd_tail_827A79E0"
+
+[functions."0x827A79F0"]
+size = 0x0C
+name = "nd_tail_827A79F0"
+
+[functions."0x827A7A38"]
+size = 0x0C
+name = "nd_tail_827A7A38"
+
+[functions."0x827A7A48"]
+size = 0x0C
+name = "nd_tail_827A7A48"
+
+[functions."0x827A7A58"]
+size = 0x0C
+name = "nd_tail_827A7A58"
+
+[functions."0x827A7A78"]
+size = 0x0C
+name = "nd_tail_827A7A78"
+
+[functions."0x827A7AA8"]
+size = 0x0C
+name = "nd_tail_827A7AA8"
+
+[functions."0x827A7AD8"]
+size = 0x0C
+name = "nd_tail_827A7AD8"
+
+[functions."0x827A7B20"]
+size = 0x0C
+name = "nd_tail_827A7B20"
+
+[functions."0x827A7B40"]
+size = 0x0C
+name = "nd_tail_827A7B40"
+
+[functions."0x827A7B98"]
+size = 0x0C
+name = "nd_tail_827A7B98"
+
+[functions."0x827A7BA8"]
+size = 0x0C
+name = "nd_tail_827A7BA8"
+
+[functions."0x827A7BF0"]
+size = 0x0C
+name = "nd_tail_827A7BF0"
+
+[functions."0x827A7E70"]
+size = 0x0C
+name = "nd_tail_827A7E70"
+
+[functions."0x827A7F58"]
+size = 0x0C
+name = "nd_tail_827A7F58"
+
+[functions."0x827A7FE8"]
+size = 0x0C
+name = "nd_tail_827A7FE8"
+
+[functions."0x827A7FF8"]
+size = 0x0C
+name = "nd_tail_827A7FF8"
+
+[functions."0x827A8008"]
+size = 0x0C
+name = "nd_tail_827A8008"
+
+[functions."0x827A8050"]
+size = 0x0C
+name = "nd_tail_827A8050"
+
+[functions."0x827A8060"]
+size = 0x0C
+name = "nd_tail_827A8060"
+
+[functions."0x827A80F8"]
+size = 0x0C
+name = "nd_tail_827A80F8"
+
+[functions."0x827A8128"]
+size = 0x0C
+name = "nd_tail_827A8128"
+
+[functions."0x827A8148"]
+size = 0x0C
+name = "nd_tail_827A8148"
+
+[functions."0x827A8168"]
+size = 0x0C
+name = "nd_tail_827A8168"
+
+[functions."0x827A8310"]
+size = 0x0C
+name = "nd_tail_827A8310"
+
+[functions."0x827A8390"]
+size = 0x0C
+name = "nd_tail_827A8390"
+
+[functions."0x827A8468"]
+size = 0x0C
+name = "nd_tail_827A8468"
+
+[functions."0x827A8608"]
+size = 0x0C
+name = "nd_tail_827A8608"
+
+[functions."0x827A8638"]
+size = 0x0C
+name = "nd_tail_827A8638"
+
+[functions."0x827A8688"]
+size = 0x0C
+name = "nd_tail_827A8688"
+
+[functions."0x827A8698"]
+size = 0x0C
+name = "nd_tail_827A8698"
+
+[functions."0x827A86B8"]
+size = 0x0C
+name = "nd_tail_827A86B8"
+
+[functions."0x827A8B20"]
+size = 0x0C
+name = "nd_tail_827A8B20"
+
+[functions."0x827A8EF8"]
+size = 0x0C
+name = "nd_tail_827A8EF8"
+
+[functions."0x827A91A0"]
+size = 0x0C
+name = "nd_tail_827A91A0"
+
+[functions."0x827A91C0"]
+size = 0x0C
+name = "nd_tail_827A91C0"
+
+[functions."0x827A9C38"]
+size = 0x0C
+name = "nd_tail_827A9C38"
+
+[functions."0x827A9D58"]
+size = 0x0C
+name = "nd_tail_827A9D58"
+
+[functions."0x827AA9A0"]
+size = 0x0C
+name = "nd_tail_827AA9A0"
+
+[functions."0x827AB030"]
+size = 0x0C
+name = "nd_tail_827AB030"
+
+[functions."0x827AB548"]
+size = 0x0C
+name = "nd_tail_827AB548"
+
+[functions."0x827AB568"]
+size = 0x0C
+name = "nd_tail_827AB568"
+
+[functions."0x827ABDD0"]
+size = 0x0C
+name = "nd_tail_827ABDD0"
+
+[functions."0x827ABDE0"]
+size = 0x0C
+name = "nd_tail_827ABDE0"
+
+[functions."0x827ABDF0"]
+size = 0x0C
+name = "nd_tail_827ABDF0"
+
+[functions."0x827ABE00"]
+size = 0x0C
+name = "nd_tail_827ABE00"
+
+[functions."0x827AC4C8"]
+size = 0x0C
+name = "nd_tail_827AC4C8"
+
+[functions."0x827AC4D8"]
+size = 0x0C
+name = "nd_tail_827AC4D8"
+
+[functions."0x827AC4E8"]
+size = 0x0C
+name = "nd_tail_827AC4E8"
+
+[functions."0x827AC648"]
+size = 0x0C
+name = "nd_tail_827AC648"
+
+[functions."0x827AC658"]
+size = 0x0C
+name = "nd_tail_827AC658"
+
+[functions."0x827AC668"]
+size = 0x0C
+name = "nd_tail_827AC668"
+
+[functions."0x827AC678"]
+size = 0x0C
+name = "nd_tail_827AC678"
+
+[functions."0x827AC688"]
+size = 0x0C
+name = "nd_tail_827AC688"
+
+[functions."0x827AC720"]
+size = 0x0C
+name = "nd_tail_827AC720"
+
+[functions."0x827AC730"]
+size = 0x0C
+name = "nd_tail_827AC730"
+
+[functions."0x827AC740"]
+size = 0x0C
+name = "nd_tail_827AC740"
+
+[functions."0x827AC7D8"]
+size = 0x0C
+name = "nd_tail_827AC7D8"
+
+[functions."0x827AC7E8"]
+size = 0x0C
+name = "nd_tail_827AC7E8"
+
+[functions."0x827AC7F8"]
+size = 0x0C
+name = "nd_tail_827AC7F8"
+
+[functions."0x827AC808"]
+size = 0x0C
+name = "nd_tail_827AC808"
+
+[functions."0x827ACA58"]
+size = 0x0C
+name = "nd_tail_827ACA58"
+
+[functions."0x827ACDA0"]
+size = 0x0C
+name = "nd_tail_827ACDA0"
+
+[functions."0x827ACF10"]
+size = 0x0C
+name = "nd_tail_827ACF10"
+
+[functions."0x827ACF20"]
+size = 0x0C
+name = "nd_tail_827ACF20"
+
+[functions."0x827AD170"]
+size = 0x0C
+name = "nd_tail_827AD170"
+
+[functions."0x827AD1A0"]
+size = 0x0C
+name = "nd_tail_827AD1A0"
+
+[functions."0x827AD230"]
+size = 0x0C
+name = "nd_tail_827AD230"
+
+[functions."0x827AD240"]
+size = 0x0C
+name = "nd_tail_827AD240"
+
+[functions."0x827AD250"]
+size = 0x0C
+name = "nd_tail_827AD250"
+
+[functions."0x827AD3F8"]
+size = 0x0C
+name = "nd_tail_827AD3F8"
+
+[functions."0x827AD418"]
+size = 0x0C
+name = "nd_tail_827AD418"
+
+[functions."0x827AD5B8"]
+size = 0x0C
+name = "nd_tail_827AD5B8"
+
+[functions."0x827AD5E0"]
+size = 0x0C
+name = "nd_tail_827AD5E0"
+
+[functions."0x827AD5F0"]
+size = 0x0C
+name = "nd_tail_827AD5F0"
+
+[functions."0x827AD650"]
+size = 0x0C
+name = "nd_tail_827AD650"
+
+[functions."0x827AD660"]
+size = 0x0C
+name = "nd_tail_827AD660"
+
+[functions."0x827AD680"]
+size = 0x0C
+name = "nd_tail_827AD680"
+
+[functions."0x827AD6F8"]
+size = 0x0C
+name = "nd_tail_827AD6F8"
+
+[functions."0x827AD720"]
+size = 0x0C
+name = "nd_tail_827AD720"
+
+[functions."0x827AD730"]
+size = 0x0C
+name = "nd_tail_827AD730"
+
+[functions."0x827AD828"]
+size = 0x0C
+name = "nd_tail_827AD828"
+
+[functions."0x827AD838"]
+size = 0x0C
+name = "nd_tail_827AD838"
+
+[functions."0x827AD848"]
+size = 0x0C
+name = "nd_tail_827AD848"
+
+[functions."0x827AD8B8"]
+size = 0x0C
+name = "nd_tail_827AD8B8"
+
+[functions."0x827AD910"]
+size = 0x0C
+name = "nd_tail_827AD910"
+
+[functions."0x827AD920"]
+size = 0x0C
+name = "nd_tail_827AD920"
+
+[functions."0x827AE0B0"]
+size = 0x0C
+name = "nd_tail_827AE0B0"
+
+[functions."0x827AE1E0"]
+size = 0x0C
+name = "nd_tail_827AE1E0"
+
+[functions."0x827AE310"]
+size = 0x0C
+name = "nd_tail_827AE310"
+
+[functions."0x827AE320"]
+size = 0x0C
+name = "nd_tail_827AE320"
+
+[functions."0x827AE330"]
+size = 0x0C
+name = "nd_tail_827AE330"
+
+[functions."0x827AE340"]
+size = 0x0C
+name = "nd_tail_827AE340"
+
+[functions."0x827AE350"]
+size = 0x0C
+name = "nd_tail_827AE350"
+
+[functions."0x827AE360"]
+size = 0x0C
+name = "nd_tail_827AE360"
+
+[functions."0x827AE370"]
+size = 0x0C
+name = "nd_tail_827AE370"
+
+[functions."0x827AE380"]
+size = 0x0C
+name = "nd_tail_827AE380"
+
+[functions."0x827AE390"]
+size = 0x0C
+name = "nd_tail_827AE390"
+
+[functions."0x827AE3B0"]
+size = 0x0C
+name = "nd_tail_827AE3B0"
+
+[functions."0x827AE3E0"]
+size = 0x0C
+name = "nd_tail_827AE3E0"
+
+[functions."0x827AE410"]
+size = 0x0C
+name = "nd_tail_827AE410"
+
+[functions."0x827AE440"]
+size = 0x0C
+name = "nd_tail_827AE440"
+
+[functions."0x827AE560"]
+size = 0x0C
+name = "nd_tail_827AE560"
+
+[functions."0x827AE5B0"]
+size = 0x0C
+name = "nd_tail_827AE5B0"
+
+[functions."0x827AE628"]
+size = 0x0C
+name = "nd_tail_827AE628"
+
+[functions."0x827AE638"]
+size = 0x0C
+name = "nd_tail_827AE638"
+
+[functions."0x827AE648"]
+size = 0x0C
+name = "nd_tail_827AE648"
+
+[functions."0x827AE658"]
+size = 0x0C
+name = "nd_tail_827AE658"
+
+[functions."0x827AE668"]
+size = 0x0C
+name = "nd_tail_827AE668"
+
+[functions."0x827AE6A0"]
+size = 0x0C
+name = "nd_tail_827AE6A0"
+
+[functions."0x827AE6B0"]
+size = 0x0C
+name = "nd_tail_827AE6B0"
+
+[functions."0x827AE6D0"]
+size = 0x0C
+name = "nd_tail_827AE6D0"
+
+[functions."0x827AE6F0"]
+size = 0x0C
+name = "nd_tail_827AE6F0"
+
+[functions."0x827AE700"]
+size = 0x0C
+name = "nd_tail_827AE700"
+
+[functions."0x827AE710"]
+size = 0x0C
+name = "nd_tail_827AE710"
+
+[functions."0x827AE720"]
+size = 0x0C
+name = "nd_tail_827AE720"
+
+[functions."0x827AE730"]
+size = 0x0C
+name = "nd_tail_827AE730"
+
+[functions."0x827AE7B0"]
+size = 0x0C
+name = "nd_tail_827AE7B0"
+
+[functions."0x827AE7D0"]
+size = 0x0C
+name = "nd_tail_827AE7D0"
+
+[functions."0x827AE828"]
+size = 0x0C
+name = "nd_tail_827AE828"
+
+[functions."0x827AE8C8"]
+size = 0x0C
+name = "nd_tail_827AE8C8"
+
+[functions."0x827AE8D8"]
+size = 0x0C
+name = "nd_tail_827AE8D8"
+
+[functions."0x827AE8E8"]
+size = 0x0C
+name = "nd_tail_827AE8E8"
+
+[functions."0x827AE9E8"]
+size = 0x0C
+name = "nd_tail_827AE9E8"
+
+[functions."0x827AE9F8"]
+size = 0x0C
+name = "nd_tail_827AE9F8"
+
+[functions."0x827AEA08"]
+size = 0x0C
+name = "nd_tail_827AEA08"
+
+[functions."0x827AEA98"]
+size = 0x0C
+name = "nd_tail_827AEA98"
+
+[functions."0x827AEB38"]
+size = 0x0C
+name = "nd_tail_827AEB38"
+
+[functions."0x827AEB48"]
+size = 0x0C
+name = "nd_tail_827AEB48"
+
+[functions."0x827AEB58"]
+size = 0x0C
+name = "nd_tail_827AEB58"
+
+[functions."0x827AEB68"]
+size = 0x0C
+name = "nd_tail_827AEB68"
+
+[functions."0x827AEB78"]
+size = 0x0C
+name = "nd_tail_827AEB78"
+
+[functions."0x827AEB88"]
+size = 0x0C
+name = "nd_tail_827AEB88"
+
+[functions."0x827AEB98"]
+size = 0x0C
+name = "nd_tail_827AEB98"
+
+[functions."0x827AEBA8"]
+size = 0x0C
+name = "nd_tail_827AEBA8"
+
+[functions."0x827AEBB8"]
+size = 0x0C
+name = "nd_tail_827AEBB8"
+
+[functions."0x827AEBC8"]
+size = 0x0C
+name = "nd_tail_827AEBC8"
+
+[functions."0x827AEC98"]
+size = 0x0C
+name = "nd_tail_827AEC98"
+
+[functions."0x827AECA8"]
+size = 0x0C
+name = "nd_tail_827AECA8"
+
+[functions."0x827AECB8"]
+size = 0x0C
+name = "nd_tail_827AECB8"
+
+[functions."0x827AECC8"]
+size = 0x0C
+name = "nd_tail_827AECC8"
+
+[functions."0x827AECD8"]
+size = 0x0C
+name = "nd_tail_827AECD8"
+
+[functions."0x827AECE8"]
+size = 0x0C
+name = "nd_tail_827AECE8"
+
+[functions."0x827AED68"]
+size = 0x0C
+name = "nd_tail_827AED68"
+
+[functions."0x827AED78"]
+size = 0x0C
+name = "nd_tail_827AED78"
+
+[functions."0x827AED88"]
+size = 0x0C
+name = "nd_tail_827AED88"
+
+[functions."0x827AEDD8"]
+size = 0x0C
+name = "nd_tail_827AEDD8"
+
+[functions."0x827AEDE8"]
+size = 0x0C
+name = "nd_tail_827AEDE8"
+
+[functions."0x827AEDF8"]
+size = 0x0C
+name = "nd_tail_827AEDF8"
+
+[functions."0x827AEE08"]
+size = 0x0C
+name = "nd_tail_827AEE08"
+
+[functions."0x827AEE18"]
+size = 0x0C
+name = "nd_tail_827AEE18"
+
+[functions."0x827AEE28"]
+size = 0x0C
+name = "nd_tail_827AEE28"
+
+[functions."0x827AEEE8"]
+size = 0x0C
+name = "nd_tail_827AEEE8"
+
+[functions."0x827AEEF8"]
+size = 0x0C
+name = "nd_tail_827AEEF8"
+
+[functions."0x827AEF48"]
+size = 0x0C
+name = "nd_tail_827AEF48"
+
+[functions."0x827AEF90"]
+size = 0x0C
+name = "nd_tail_827AEF90"
+
+[functions."0x827AF000"]
+size = 0x0C
+name = "nd_tail_827AF000"
+
+[functions."0x827AF090"]
+size = 0x0C
+name = "nd_tail_827AF090"
+
+[functions."0x827AF5F8"]
+size = 0x0C
+name = "nd_tail_827AF5F8"
+
+[functions."0x827AF628"]
+size = 0x0C
+name = "nd_tail_827AF628"
+
+[functions."0x827AF648"]
+size = 0x0C
+name = "nd_tail_827AF648"
+
+[functions."0x827AF668"]
+size = 0x0C
+name = "nd_tail_827AF668"
+
+[functions."0x827AF698"]
+size = 0x0C
+name = "nd_tail_827AF698"
+
+[functions."0x827AF7C8"]
+size = 0x0C
+name = "nd_tail_827AF7C8"
+
+[functions."0x827AF960"]
+size = 0x0C
+name = "nd_tail_827AF960"
+
+[functions."0x827AFD38"]
+size = 0x0C
+name = "nd_tail_827AFD38"
+
+[functions."0x827AFDF0"]
+size = 0x0C
+name = "nd_tail_827AFDF0"
+
+[functions."0x827AFE00"]
+size = 0x0C
+name = "nd_tail_827AFE00"
+
+[functions."0x827AFE58"]
+size = 0x0C
+name = "nd_tail_827AFE58"
+
+[functions."0x827AFF40"]
+size = 0x0C
+name = "nd_tail_827AFF40"
+
+[functions."0x827AFF70"]
+size = 0x0C
+name = "nd_tail_827AFF70"
+
+[functions."0x827AFFD8"]
+size = 0x0C
+name = "nd_tail_827AFFD8"
+
+[functions."0x827AFFF8"]
+size = 0x0C
+name = "nd_tail_827AFFF8"
+
+[functions."0x827B0088"]
+size = 0x0C
+name = "nd_tail_827B0088"
+
+[functions."0x827B00A8"]
+size = 0x0C
+name = "nd_tail_827B00A8"
+
+[functions."0x827B00F0"]
+size = 0x0C
+name = "nd_tail_827B00F0"
+
+[functions."0x827B0110"]
+size = 0x0C
+name = "nd_tail_827B0110"
+
+[functions."0x827B0130"]
+size = 0x0C
+name = "nd_tail_827B0130"
+
+[functions."0x827B0450"]
+size = 0x0C
+name = "nd_tail_827B0450"
+
+[functions."0x827B2120"]
+size = 0x0C
+name = "nd_tail_827B2120"
+
+[functions."0x827B3AE8"]
+size = 0x0C
+name = "nd_tail_827B3AE8"
+
+[functions."0x827B3B80"]
+size = 0x0C
+name = "nd_tail_827B3B80"
+
+[functions."0x827B3BA0"]
+size = 0x0C
+name = "nd_tail_827B3BA0"
+
+[functions."0x827B3BC0"]
+size = 0x0C
+name = "nd_tail_827B3BC0"
+
+[functions."0x827B3C5C"]
+size = 0x0C
+name = "nd_tail_827B3C5C"
+
+[functions."0x827B3C78"]
+size = 0x0C
+name = "nd_tail_827B3C78"
+
+[functions."0x827B3C88"]
+size = 0x0C
+name = "nd_tail_827B3C88"
+
+[functions."0x827B3CAC"]
+size = 0x0C
+name = "nd_tail_827B3CAC"
+
+[functions."0x827B3D78"]
+size = 0x0C
+name = "nd_tail_827B3D78"
+
+[functions."0x827B3DD0"]
+size = 0x0C
+name = "nd_tail_827B3DD0"
+
+[functions."0x827B3FA0"]
+size = 0x0C
+name = "nd_tail_827B3FA0"
+
+[functions."0x827B3FB0"]
+size = 0x0C
+name = "nd_tail_827B3FB0"
+
+[functions."0x827B3FC0"]
+size = 0x0C
+name = "nd_tail_827B3FC0"
+
+[functions."0x827B3FD0"]
+size = 0x0C
+name = "nd_tail_827B3FD0"
+
+[functions."0x827B4068"]
+size = 0x0C
+name = "nd_tail_827B4068"
+
+[functions."0x827B41D0"]
+size = 0x0C
+name = "nd_tail_827B41D0"
+
+[functions."0x827B41E0"]
+size = 0x0C
+name = "nd_tail_827B41E0"
+
+[functions."0x827B41F0"]
+size = 0x0C
+name = "nd_tail_827B41F0"
+
+[functions."0x827B4200"]
+size = 0x0C
+name = "nd_tail_827B4200"
+
+[functions."0x827B4348"]
+size = 0x0C
+name = "nd_tail_827B4348"
+
+[functions."0x827B436C"]
+size = 0x0C
+name = "nd_tail_827B436C"
+
+[functions."0x827B4448"]
+size = 0x0C
+name = "nd_tail_827B4448"
+
+[functions."0x827B4468"]
+size = 0x0C
+name = "nd_tail_827B4468"
+
+[functions."0x827B4680"]
+size = 0x0C
+name = "nd_tail_827B4680"
+
+[functions."0x827B4908"]
+size = 0x0C
+name = "nd_tail_827B4908"
+
+[functions."0x827B4D34"]
+size = 0x0C
+name = "nd_tail_827B4D34"
+
+[functions."0x827B4E10"]
+size = 0x0C
+name = "nd_tail_827B4E10"
+
+[functions."0x827B4EA8"]
+size = 0x0C
+name = "nd_tail_827B4EA8"
+
+[functions."0x827B5108"]
+size = 0x0C
+name = "nd_tail_827B5108"
+
+[functions."0x827B5378"]
+size = 0x0C
+name = "nd_tail_827B5378"
+
+[functions."0x827B5A08"]
+size = 0x0C
+name = "nd_tail_827B5A08"
+
+[functions."0x827B5BF8"]
+size = 0x0C
+name = "nd_tail_827B5BF8"
+
+[functions."0x827B5C08"]
+size = 0x0C
+name = "nd_tail_827B5C08"
+
+[functions."0x827B5C18"]
+size = 0x0C
+name = "nd_tail_827B5C18"
+
+[functions."0x827B6100"]
+size = 0x0C
+name = "nd_tail_827B6100"
+
+[functions."0x827B6BF0"]
+size = 0x0C
+name = "nd_tail_827B6BF0"
+
+[functions."0x827B6FF8"]
+size = 0x0C
+name = "nd_tail_827B6FF8"
+
+[functions."0x827B8970"]
+size = 0x0C
+name = "nd_tail_827B8970"
+
+[functions."0x827B8AB8"]
+size = 0x0C
+name = "nd_tail_827B8AB8"
+
+[functions."0x827B8BC0"]
+size = 0x0C
+name = "nd_tail_827B8BC0"
+
+[functions."0x827B8C48"]
+size = 0x0C
+name = "nd_tail_827B8C48"
+
+[functions."0x827B9298"]
+size = 0x0C
+name = "nd_tail_827B9298"
+
+[functions."0x827B92E0"]
+size = 0x0C
+name = "nd_tail_827B92E0"
+
+[functions."0x827B95F0"]
+size = 0x0C
+name = "nd_tail_827B95F0"
+
+[functions."0x827B9BE0"]
+size = 0x0C
+name = "nd_tail_827B9BE0"
+
+[functions."0x827B9BF0"]
+size = 0x0C
+name = "nd_tail_827B9BF0"
+
+[functions."0x827BA170"]
+size = 0x0C
+name = "nd_tail_827BA170"
+
+[functions."0x827BA180"]
+size = 0x0C
+name = "nd_tail_827BA180"
+
+[functions."0x827BA190"]
+size = 0x0C
+name = "nd_tail_827BA190"
+
+[functions."0x827BA1A0"]
+size = 0x0C
+name = "nd_tail_827BA1A0"
+
+[functions."0x827BA1E0"]
+size = 0x0C
+name = "nd_tail_827BA1E0"
+
+[functions."0x827BA2A0"]
+size = 0x0C
+name = "nd_tail_827BA2A0"
+
+[functions."0x827BA438"]
+size = 0x0C
+name = "nd_tail_827BA438"
+
+[functions."0x827BA4E8"]
+size = 0x0C
+name = "nd_tail_827BA4E8"
+
+[functions."0x827BA620"]
+size = 0x0C
+name = "nd_tail_827BA620"
+
+[functions."0x827BAC58"]
+size = 0x0C
+name = "nd_tail_827BAC58"
+
+[functions."0x827BAC68"]
+size = 0x0C
+name = "nd_tail_827BAC68"
+
+[functions."0x827BAF70"]
+size = 0x0C
+name = "nd_tail_827BAF70"
+
+[functions."0x827BAF80"]
+size = 0x0C
+name = "nd_tail_827BAF80"
+
+[functions."0x827BB0A8"]
+size = 0x0C
+name = "nd_tail_827BB0A8"
+
+[functions."0x827BB0B8"]
+size = 0x0C
+name = "nd_tail_827BB0B8"
+
+[functions."0x827BB1D0"]
+size = 0x0C
+name = "nd_tail_827BB1D0"
+
+[functions."0x827BB1E0"]
+size = 0x0C
+name = "nd_tail_827BB1E0"
+
+[functions."0x827BB2D8"]
+size = 0x0C
+name = "nd_tail_827BB2D8"
+
+[functions."0x827BB2E8"]
+size = 0x0C
+name = "nd_tail_827BB2E8"
+
+[functions."0x827BB320"]
+size = 0x0C
+name = "nd_tail_827BB320"
+
+[functions."0x827BB370"]
+size = 0x0C
+name = "nd_tail_827BB370"
+
+[functions."0x827BB3B0"]
+size = 0x0C
+name = "nd_tail_827BB3B0"
+
+[functions."0x827BB498"]
+size = 0x0C
+name = "nd_tail_827BB498"
+
+[functions."0x827BB4F0"]
+size = 0x0C
+name = "nd_tail_827BB4F0"
+
+[functions."0x827BB550"]
+size = 0x0C
+name = "nd_tail_827BB550"
+
+[functions."0x827BB5B0"]
+size = 0x0C
+name = "nd_tail_827BB5B0"
+
+[functions."0x827BB5C0"]
+size = 0x0C
+name = "nd_tail_827BB5C0"
+
+[functions."0x827BB888"]
+size = 0x0C
+name = "nd_tail_827BB888"
+
+[functions."0x827BEDF0"]
+size = 0x0C
+name = "nd_tail_827BEDF0"
+
+[functions."0x827BEFF0"]
+size = 0x0C
+name = "nd_tail_827BEFF0"
+
+[functions."0x827BF4D0"]
+size = 0x0C
+name = "nd_tail_827BF4D0"
+
+[functions."0x827BF588"]
+size = 0x0C
+name = "nd_tail_827BF588"
+
+[functions."0x827BF5C8"]
+size = 0x0C
+name = "nd_tail_827BF5C8"
+

@@ -1,0 +1,125 @@
+================================================================================================
+DIRECCION    NOMBRE                             LEE  ESCR  FUNCIONES QUE LO LEEN
+================================================================================================
+0x828E1FB0  Render.Enable.Skybox                 1     0  sub_823594F8
+0x828E1FB1  Render.Enable.Env                    2     0  sub_8232C4C8, sub_8232C4E8
+0x828E1FB2  Render.Enable.EnvForward             1     0  sub_82324EF8
+0x828E1FB3  Render.Enable.Objects                5     0  sub_821DAA68, sub_822A9668, sub_8232D340 ...
+0x828E1FB4  Render.Enable.Botanicals             0     0  
+0x828E1FB5  Render.Enable.Carpet                 1     0  sub_823B2E58
+0x828E1FB6  Render.Enable.Water                  1     0  sub_82325360
+0x828E1FB7  Render.Enable.Shadows                3     0  sub_82321C78, sub_82321ED8, sub_823762A0
+0x828E1FB8  Render.Enable.Beams                  0     0  
+0x828E1FB9  Render.Enable.Decals                 1     0  sub_82359D80
+0x828E1FBA  Render.Enable.ObjectDecals           2     0  sub_823BFFB8, sub_823E1790
+0x828E1FBB  Render.Enable.Photons                1     0  sub_82321C78
+0x828E1FBC  Render.Enable.Projectors             1     0  sub_82321ED8
+0x828E1FBD  Render.Enable.PFX                    1     0  sub_82364860
+0x828E1FBE  Render.Enable.Coronas                1     0  sub_82354D28
+0x828E1FBF  Render.Enable.LightShafts            1     0  sub_82356FD0
+0x828E1FC0  Render.Enable.Fog                    1     0  sub_82327340
+0x828E1FC1  Render.Enable.FSFX                   1     0  sub_82371AD0
+0x828E1FC2  Render.Enable.GUI                    3     0  sub_8232C9A0, sub_82399170, sub_823992C8
+0x828E1FC3  Render.Enable.HUD                    3     0  sub_823902F8, sub_82661168, sub_82669FD8
+0x828E1FC4  Render.Enable.ClearScreen            0     0  
+0x828E1FC5  Render.Enable.CSM                    3     0  sub_823749A8, sub_82374ED0
+0x828E1FC6  Render.Enable.HDRbloom               1     0  sub_823D8020
+0x828E1FC7  Render.Enable.SSAO                   1     0  sub_82321958
+0x828E1FC8  Render.Enable.Weather                1     0  sub_8235B0C0
+0x828E1FC9  Render.Enable.RMLAA                  3     0  sub_823DED48, sub_823E02B0, sub_823E0AA0
+0x82801CEF  Render.MotionBlur.Enabled            1     0  sub_823F0A60
+
+================================================================================================
+DETALLE DE LECTURAS (funcion, archivo:linea)
+================================================================================================
+
+Render.Enable.Skybox  (0x828E1FB0) — 1 lecturas
+   sub_823594F8  neverdead_recomp.85.cpp:8745
+
+Render.Enable.Env  (0x828E1FB1) — 2 lecturas
+   sub_8232C4C8  neverdead_recomp.18.cpp:9066
+   sub_8232C4E8  neverdead_recomp.87.cpp:7657
+
+Render.Enable.EnvForward  (0x828E1FB2) — 1 lecturas
+   sub_82324EF8  neverdead_recomp.33.cpp:9167
+
+Render.Enable.Objects  (0x828E1FB3) — 5 lecturas
+   vtable_slot_822A9630  neverdead_recomp.110.cpp:4913
+   vtable_slot_822A95F8  neverdead_recomp.3.cpp:5448
+   sub_822A9668  neverdead_recomp.49.cpp:5834
+   sub_8232D340  neverdead_recomp.54.cpp:8336
+   sub_821DAA68  neverdead_recomp.64.cpp:530
+
+Render.Enable.Carpet  (0x828E1FB5) — 1 lecturas
+   sub_823B2E58  neverdead_recomp.41.cpp:13024
+
+Render.Enable.Water  (0x828E1FB6) — 1 lecturas
+   sub_82325360  neverdead_recomp.21.cpp:9193
+
+Render.Enable.Shadows  (0x828E1FB7) — 3 lecturas
+   sub_82321ED8  neverdead_recomp.39.cpp:8658
+   sub_823762A0  neverdead_recomp.49.cpp:9496
+   sub_82321C78  neverdead_recomp.93.cpp:6752
+
+Render.Enable.Decals  (0x828E1FB9) — 1 lecturas
+   sub_82359D80  neverdead_recomp.44.cpp:7045
+
+Render.Enable.ObjectDecals  (0x828E1FBA) — 2 lecturas
+   sub_823BFFB8  neverdead_recomp.24.cpp:8999
+   sub_823E1790  neverdead_recomp.81.cpp:7300
+
+Render.Enable.Photons  (0x828E1FBB) — 1 lecturas
+   sub_82321C78  neverdead_recomp.93.cpp:6623
+
+Render.Enable.Projectors  (0x828E1FBC) — 1 lecturas
+   sub_82321ED8  neverdead_recomp.39.cpp:8518
+
+Render.Enable.PFX  (0x828E1FBD) — 1 lecturas
+   sub_82364860  neverdead_recomp.57.cpp:10893
+
+Render.Enable.Coronas  (0x828E1FBE) — 1 lecturas
+   sub_82354D28  neverdead_recomp.87.cpp:8454
+
+Render.Enable.LightShafts  (0x828E1FBF) — 1 lecturas
+   sub_82356FD0  neverdead_recomp.97.cpp:4878
+
+Render.Enable.Fog  (0x828E1FC0) — 1 lecturas
+   sub_82327340  neverdead_recomp.57.cpp:8981
+
+Render.Enable.FSFX  (0x828E1FC1) — 1 lecturas
+   sub_82371AD0  neverdead_recomp.116.cpp:10586
+
+Render.Enable.GUI  (0x828E1FC2) — 3 lecturas
+   sub_823992C8  neverdead_recomp.11.cpp:8145
+   sub_82399170  neverdead_recomp.6.cpp:10921
+   sub_8232C9A0  neverdead_recomp.64.cpp:7884
+
+Render.Enable.HUD  (0x828E1FC3) — 3 lecturas
+   sub_82661168  neverdead_recomp.16.cpp:23363
+   sub_823902F8  neverdead_recomp.19.cpp:11079
+   sub_82669FD8  neverdead_recomp.26.cpp:23755
+
+Render.Enable.CSM  (0x828E1FC5) — 3 lecturas
+   sub_823749A8  neverdead_recomp.116.cpp:10831
+   sub_82374ED0  neverdead_recomp.70.cpp:7655
+   sub_82374ED0  neverdead_recomp.70.cpp:7674
+
+Render.Enable.HDRbloom  (0x828E1FC6) — 1 lecturas
+   sub_823D8020  neverdead_recomp.61.cpp:12036
+
+Render.Enable.SSAO  (0x828E1FC7) — 1 lecturas
+   sub_82321958  neverdead_recomp.11.cpp:5674
+
+Render.Enable.Weather  (0x828E1FC8) — 1 lecturas
+   sub_8235B0C0  neverdead_recomp.65.cpp:9978
+
+Render.Enable.RMLAA  (0x828E1FC9) — 3 lecturas
+   sub_823E02B0  neverdead_recomp.11.cpp:9737
+   sub_823E0AA0  neverdead_recomp.111.cpp:11368
+   sub_823DED48  neverdead_recomp.99.cpp:8899
+
+Render.MotionBlur.Enabled  (0x82801CEF) — 1 lecturas
+   sub_823F0A60  neverdead_recomp.1.cpp:10054
+
+================================================================================================
+FUNCIONES QUE TOCAN EL BLOQUE 0x828E1FB0: 0

@@ -1,0 +1,97 @@
+[2026-10-29 01:35:03.947] [info] [core] [t3836] neverdead: [PAINT-MODE] copia inline de GetDesiredPaintMode forzada a 2 (rexruntime+0xD6C8D: mov r15d,2; rexruntime+0xD6C9A: jmp sin comprobar implicit_vsync/ui_drawers_)
+[2026-10-29 01:35:03.948] [info] [core] [t3836] neverdead: [PAINT-MODE] SetPaintModeFromUIThread hookeado en rexruntime+0xD6170 (red de seguridad; en esta build no tiene callers directos, el modo efectivo lo fija NdPatchInlinedPaintMode), paint_mode_ en +0xA8
+[2026-10-29 01:35:03.948] [info] [core] [t3836] neverdead: [PAINT-GATE] Puerta temprana activa en Presenter::PaintFromUIThread (rexruntime+0xD6AC0)
+[2026-10-29 01:35:03.948] [info] [core] [t3836] neverdead: [PAINT-GATE] Puerta de prologo activa en D3D12Presenter::PaintAndPresent (rexruntime+0xFFC10) -> kNotPresented si no hay nuevo frame
+[2026-10-29 01:35:03.948] [info] [core] [t3836] neverdead: [PAINT-MODE] epilogo de PaintFromUIThread hookeado (rexruntime+0xDE951): paint_mode_=2 tras cada paint
+[2026-10-29 01:35:03.948] [info] [core] [t3836] neverdead: [PRESENT-HOOK] IDXGIFactory2::CreateSwapChainForHwnd hookeado (vtable[15]) en dxgi.dll; Present se interceptara al crear el swap chain
+[2026-10-29 01:35:03.948] [info] [core] [t3836] neverdead: [XCTD-SILENCE] error logs de XFileXctdCompressionInformation silenciados (rexruntime+0x3DB042)
+[2026-10-29 01:35:03.948] [info] [core] [t3836] neverdead: configured gpu_plugin = 'xenos' for D3D12 presentation
+[2026-10-29 01:35:04.051] [info] [gpu] [t3836] DXGI adapter: NVIDIA GeForce RTX 2060 (vendor 0x10DE, device 0x1F08)
+[2026-10-29 01:35:04.241] [info] [gpu] [t3836] Direct3D 12 device and OS features:
+* Max GPU virtual address bits per resource: 40
+* Non-zeroed heap creation: yes
+* Pixel-shader-specified stencil reference: no
+* Programmable sample positions: tier 2
+* Rasterizer-ordered views: yes
+* Resource binding: tier 3
+* Tiled resources: tier 4
+* Unaligned block-compressed textures: yes
+[2026-10-29 01:35:04.293] [info] [core] [t3836] neverdead: [WINDOW] HWND=0xb70b5a subclassed para interceptar F1 y WM_CLOSE limpia
+[2026-10-29 01:35:04.296] [info] [core] [t3836] neverdead: [PRESENT-HOOK] vtable[8] (Present) hookeada: swap_chain=0x4a2dbc50 original=0x7ffddcee9000
+[2026-10-29 01:35:04.296] [info] [sys] [t3836] Guest memory arena mapped: virtual base 0x0000000200000000, physical base 0x0000000300000000
+[2026-10-29 01:35:04.342] [info] [core] [t3836] Function table initialized for module: code=821A0000-827C05E4, image=82000000-82C10000
+[2026-10-29 01:35:04.402] [warning] [core] [t3836] SDL GameControllerDB: file 'gamecontrollerdb.txt' does not exist.
+[2026-10-29 01:35:04.402] [info] [core] [t3836] SDL input driver initialized successfully
+[2026-10-29 01:35:04.447] [info] [core] [t3836] neverdead: pre-map obj@82144930 [+0]=822CE8F0 [+16]=824DDF90 [+32]=824DDFF0 [+48]=004E0065 [+64]=00520065
+[2026-10-29 01:35:04.448] [info] [core] [t3836] neverdead: MapBaseExeSections unlocked 2 memory regions to writable
+[2026-10-29 01:35:04.448] [info] [core] [t3836] neverdead: MapBaseExeSections .rdata rva=0xA40 size=0x16EDC0 DESACTIVADO
+[2026-10-29 01:35:04.448] [info] [core] [t3836] neverdead: MapBaseExeSections .pdata rva=0x16F800 size=0x26600 DESACTIVADO
+[2026-10-29 01:35:04.448] [info] [core] [t3836] neverdead: MapBaseExeSections .data rva=0x7D5C00 size=0xC1200 shift=0x0 palabras_rellenadas=0
+[2026-10-29 01:35:04.448] [info] [core] [t3836] neverdead: MapBaseExeSections .post rva=0xB7BE00 size=0x14400 DESACTIVADO
+[2026-10-29 01:35:04.448] [info] [core] [t3836] neverdead: MapBaseExeSections holes-only completado (.rdata=0, .pdata=0, .data=0, .post=0; IAT [0x600,0xA40) preservado)
+[2026-10-29 01:35:04.448] [info] [core] [t3836] neverdead: post-load probe obj=0x82144930 slot=0x82144940 value=0x824DDF90
+[2026-10-29 01:35:04.448] [warning] [core] [t3836] neverdead: .rdata ausente en slot (got 0x824DDF90, want 0x8249EF98); revisar game_data_root/XEX
+[2026-10-29 01:35:04.448] [info] [core] [t3836] neverdead: post-load vtable@82140958 = [0x827A6330, 0x8248D340]
+[2026-10-29 01:35:04.448] [info] [core] [t3836] neverdead: map-diag vtable@82144940 host-idx=00050656 guest=0x82141958
+[2026-10-29 01:35:04.448] [info] [core] [t3836] neverdead: map-diag vtable@82144940 host-idx=000506CA guest=0x82141B28
+[2026-10-29 01:35:04.448] [info] [core] [t3836] neverdead: map-diag vtable@82144940 host-idx=0005072E guest=0x82141CB8
+[2026-10-29 01:35:04.448] [info] [core] [t3836] neverdead: map-diag vtable@82144940 host-idx=00050792 guest=0x82141E48
+[2026-10-29 01:35:04.448] [info] [core] [t3836] neverdead: map-diag ctor@822032B0 host-idx=000810AC guest=0x822042B0
+[2026-10-29 01:35:04.450] [info] [core] [t3836] neverdead: map-diag entry@824D9DF8 host-idx=00136B7E guest=0x824DADF8
+[2026-10-29 01:35:04.452] [info] [core] [t3836] neverdead: map-diag stub@8278BD48 host-idx=001E3752 guest=0x8278DD48
+[2026-10-29 01:35:04.452] [info] [core] [t3836] neverdead: dump dtor-array 0x827DBF90: 827B47C0 827B4858 00000000 00000000
+[2026-10-29 01:35:04.452] [info] [core] [t3836] neverdead: dump dtor-array 0x827DBFA0: 827904A0 827988F8 00000000 00000000
+[2026-10-29 01:35:04.452] [info] [core] [t3836] neverdead: dump dtor-array 0x827DBFB0: 82797B58 827905C8 00000000 00000000
+[2026-10-29 01:35:04.452] [info] [core] [t3836] neverdead: dump dtor-array 0x827DBFC0: 00000000 00000000 00000000 00000000
+[2026-10-29 01:35:04.452] [info] [core] [t3836] neverdead: dump dtor-array 0x827DBFD0: 82000A5C 82000A74 82000A80 00000010
+[2026-10-29 01:35:04.452] [info] [core] [t3836] neverdead: dump dtor-array 0x827DBFE0: 00000001 00000000 00010000 06400000
+[2026-10-29 01:35:04.452] [info] [core] [t3836] neverdead: dump dtor-array 0x827DBFF0: F0010000 826D60E8 826D39E8 826D9320
+[2026-10-29 01:35:04.452] [info] [core] [t3836] neverdead: dump cs-table 0x827EA280: 8279B008 8279B008 8279B008 8279B008
+[2026-10-29 01:35:04.452] [info] [core] [t3836] neverdead: dump cs-table 0x827EA290: 00000000 00000001 00000000 00000001
+[2026-10-29 01:35:04.452] [info] [core] [t3836] neverdead: dump cs-table 0x827EA2A0: 00000000 00000000 00000000 00000001
+[2026-10-29 01:35:04.452] [info] [core] [t3836] neverdead: dump cs-table 0x827EA2B0: 00000000 00000001 00000000 00000000
+[2026-10-29 01:35:04.452] [info] [core] [t3836] neverdead: dump cs-table 0x827EA2C0: 00000000 00000001 00000000 00000001
+[2026-10-29 01:35:04.452] [info] [core] [t3836] neverdead: dump cs-table 0x827EA2D0: 00000000 00000001 00000000 00000000
+[2026-10-29 01:35:04.452] [info] [core] [t3836] neverdead: dump cs-table 0x827EA2E0: 00000000 00000001 00000000 00000000
+[2026-10-29 01:35:04.452] [info] [core] [t3836] neverdead: dump cs-table 0x827EA2F0: 00000000 00000001 00000000 00000001
+[2026-10-29 01:35:04.452] [info] [core] [t3836] neverdead: dump vtbl-ptr 0x8249EF98: 3C608C02 606330FE 4E800020 00000000
+[2026-10-29 01:35:04.452] [info] [core] [t3836] neverdead: dump vtbl-ptr 0x8249EFA8: 7D8802A6 482EDD99 9421FF60 7C7E1B78
+[2026-10-29 01:35:04.452] [info] [core] [t3836] neverdead: dump name-pool 0x8204AFC0: 65000000 43757374 6F6D496E 74657270
+[2026-10-29 01:35:04.452] [info] [core] [t3836] neverdead: dump name-pool 0x8204AFD0: 6F6C6174 6F724F72 64657200 50735265
+[2026-10-29 01:35:04.452] [info] [core] [t3836] neverdead: dump name-pool 0x8204AFE0: 736F7572 63650000 54784361 63686553
+[2026-10-29 01:35:04.452] [info] [core] [t3836] neverdead: dump name-pool 0x8204AFF0: 656C6563 74000000 56735265 736F7572
+[2026-10-29 01:35:04.452] [info] [core] [t3836] neverdead: dump cs-pool 0x8204D340: 6E740000 50734578 706F7274 5A000000
+[2026-10-29 01:35:04.452] [info] [core] [t3836] neverdead: dump cs-pool 0x8204D350: 56734578 706F7274 436F756E 74000000
+[2026-10-29 01:35:04.452] [info] [core] [t3836] neverdead: dump cs-pool 0x8204D360: 50735061 72616D47 656E0000 53534D55
+[2026-10-29 01:35:04.452] [info] [core] [t3836] neverdead: dump cs-pool 0x8204D370: 73655472 616E736C 61746F72 00000000
+[2026-10-29 01:35:04.453] [info] [core] [t3836] neverdead: MBI base=0x282000000 alloc_base=0x280000000 alloc_prot=0x4 size=0x1880000 state=0x1000 prot=0x4 type=0x40000
+[2026-10-29 01:35:04.453] [info] [core] [t3836] neverdead: total 0 regions updated to writable
+[2026-10-29 01:35:04.456] [info] [core] [t3836] neverdead: guest physical RAM pre-commit [0x00000000, 0x40000000) at 0x200000000 result=0x200000000 (err=0)
+[2026-10-29 01:35:04.456] [info] [core] [t3836] neverdead: guest mid/high memory pre-commit [0x40000000, 0x80000000) at 0x240000000 result=0x0 (err=487)
+[2026-10-29 01:35:04.456] [info] [core] [t3836] neverdead: physical memory arena pre-commit at 0x300000000 result=0x0 (err=487)
+[2026-10-29 01:35:04.457] [info] [core] [t3836] neverdead: guest stacks/user heap commit at 0x270000000 (240MB) result=0x270000000 (err=0)
+[2026-10-29 01:35:04.457] [info] [core] [t3836] neverdead: pre-image heap commit [0x80000000, 0x82000000) at 0x280000000 result=0x280000000 (err=0)
+[2026-10-29 01:35:04.458] [info] [core] [t3836] neverdead: post-image heap commit [0x82C10000, 0x90000000) at 0x282c10000 result=0x282c10000 (err=0)
+[2026-10-29 01:35:04.458] [info] [core] [t3836] neverdead: extended kernel heap commit [0x90000000, 0x92000000) at 0x290000000 result=0x290000000 (err=0)
+[2026-10-29 01:35:04.473] [info] [core] [t3836] neverdead: guest physical RAM [0x00000000, 0x20000000) verified committed=0x20000000 newly_fixed=0x0
+[2026-10-29 01:35:04.479] [info] [core] [t3836] neverdead: guest mid/high RAM [0x40000000, 0x80000000) verified committed=0x10000000 newly_fixed=0x30000000
+[2026-10-29 01:35:04.482] [info] [core] [t3836] neverdead: guest stacks/user heap [0x70000000, 0x7F000000) verified committed=0xF000000 newly_fixed=0x0
+[2026-10-29 01:35:04.486] [info] [core] [t3836] neverdead: pre-image heap [0x80000000, 0x82000000) verified committed=0x2000000 newly_fixed=0x0
+[2026-10-29 01:35:04.490] [info] [core] [t3836] neverdead: post-image kernel heap [0x82C10000, 0x92000000) verified committed=0xF3F0000 newly_fixed=0x0
+[2026-10-29 01:35:04.490] [info] [core] [t3836] neverdead: [ASYNC-PSO] Timeout en PipelineCache::EndSubmission reducido a 0 ms en rexgpu-xenos+0xEB09F (ejecutando 0xead90 y _Cnd_signal sin congelar el hilo principal)
+[2026-10-29 01:35:04.490] [info] [core] [t3836] neverdead: VFS game: mapped to '\Device\Harddisk0\Partition1'
+[2026-10-29 01:35:04.490] [info] [core] [t3836] neverdead: VFS fallback aliases registered (dvd:, cdrom0:, assets:, FMV:, GUIMenu:, Fonts:, Text:, misc:, sounds:, D:, d:)
+[2026-10-29 01:35:04.492] [info] [core] [t3836] neverdead: [PRESENT-TRACE] tid=3836 frames=10
+[2026-10-29 01:35:04.492] [info] [core] [t3836] neverdead: [PRESENT-TRACE]   #0 neverdead.exe + 0x24A806E
+[2026-10-29 01:35:04.492] [info] [core] [t3836] neverdead: [PRESENT-TRACE]   #1 rexruntime.dll + 0x10030D
+[2026-10-29 01:35:04.492] [info] [core] [t3836] neverdead: [PRESENT-TRACE]   #2 rexruntime.dll + 0xD6BEA
+[2026-10-29 01:35:04.492] [info] [core] [t3836] neverdead: [PRESENT-TRACE]   #3 rexruntime.dll + 0xDE951
+[2026-10-29 01:35:04.492] [info] [core] [t3836] neverdead: [PRESENT-TRACE]   #4 rexruntime.dll + 0xE81D1
+[2026-10-29 01:35:04.492] [info] [core] [t3836] neverdead: [PRESENT-TRACE]   #5 rexruntime.dll + 0xE7F57
+[2026-10-29 01:35:04.492] [info] [core] [t3836] neverdead: [PRESENT-TRACE]   #6 neverdead.exe + 0x24B78DC
+[2026-10-29 01:35:04.492] [info] [core] [t3836] neverdead: [PRESENT-TRACE]   #7 neverdead.exe + 0x250C6D6
+[2026-10-29 01:35:04.492] [info] [core] [t3836] neverdead: [PRESENT-TRACE]   #8 KERNEL32.DLL + 0x2DDA7
+[2026-10-29 01:35:04.492] [info] [core] [t3836] neverdead: [PRESENT-TRACE]   #9 ntdll.dll + 0x7EE4C
+[2026-10-29 01:35:04.492] [info] [core] [t3836] neverdead: [PAINT-MODE] presenter=0x2ec6970 paint_mode_=+0xA8=1 conn_state=+0xAC=2 +0xB0=0 implicit_vsync=+0xB1=0 ui_drawers_size@+0x1C0=0
+[2026-10-29 01:35:04.493] [info] [core] [t3836] Initializing shader storage for title 4B4E081F...
+[2026-10-29 01:35:04.530] [info] [gpu] [t10868] Translated 350 shaders from the storage in 32 milliseconds

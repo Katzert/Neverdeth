@@ -1,0 +1,73 @@
+# M3 (swe_native_3d_v2) - regiones de DATOS marcadas en el invitado.
+#
+# Capa 5 de 5 del manifest por capas (includes de neverdead_manifest.toml).
+#
+# Que es esto
+# -----------
+# El codegen de ReXGlue recorre la imagen del invitado y puede acabar
+# decodificando como codigo PPC una region que en realidad son DATOS.
+# El SDK trae dos mecanismos:
+#   1) automatico: `data_region_threshold` (en [analysis]) marca como data
+#      una region tras N instrucciones invalidas consecutivas. Cubre el
+#      padding de NULs (16 dwords = 64 B).
+#   2) explicito: la tabla `invalidInstructionHints` (addr -> size) que se
+#      rellena desde este fichero. Cubre lo que el mecanismo (1) NO alcanza:
+#      datos cuyos bytes SI decodifican como instrucciones PPC validas (por
+#      ejemplo tablas de saltos, vectores de 32 bits, o bloques de bytes que
+#      casualmente forman codigo valido).
+#
+# Esquema verificado
+# -------------------
+#   rexglue_sdk/win-amd64/bin/rexglue.exe (strings del parser de config):
+#     'invalid_instructions'          -> nombre del array-of-tables
+#     "Missing 'data' in [[invalid_instructions]] entry"
+#     "Missing 'size' in [[invalid_instructions]] entry"
+#     '[config]   [[invalid_instructions]] 0x{:08X} overridden from {}'
+#   rexglue_sdk/win-amd64/include/rex/codegen/config.h:
+#     std::unordered_map<uint32_t, uint32_t> invalidInstructionHints; // addr -> size
+#   => `data` es la DIRECCION GUEST de 32 bits (VA) y `size` el tamano en bytes.
+#
+# VERIFICACION DE CADA ENTRADA
+# -----------------------------
+# Todos los bytes de todas las entradas se comprobaron por partida doble:
+#   (a) en la imagen plana del invitado (NeverDead_base.exe, VA = off + 0x82000000)
+#   (b) en el contenedor real que consume el codegen
+#       (NeverDead_uncompressed.xex, PE embebido en offset 0x3000,
+#        .rdata con vaddr==raw, de modo que VA 0x8200xxxx -> off 0x5Cxxx en el XEX)
+#   Los dos son byte-identicos en cada entrada (verificado por script).
+#   Ninguna entrada apunta a .text: todas estan en .rdata (RVA 0x600..0x16F680).
+
+# --- 1) Bloque de cadenas ASCII contiguas ------------------------------------
+# VA 0x82059704, 24 bytes:
+#   46 61 6c 6c 00 00 00 00   "Fall\0\0\0\0"
+#   46 61 6c 6c 00 00 00 00   "Fall\0\0\0\0"
+#   42 6c 6f 63 6b 65 64 00   "Blocked\0"
+# Es el caso citado en el encargo (el Prompt lo referencia como 0x8205970C con
+# "Fall\0\0\0Blocked"); los bytes reales muestran DOS cadenas "Fall" de 8 B
+# seguidas de "Blocked", asi que se marca el bloque completo desde 0x82059704
+# (24 B) para no dejar fuera la primera cadena.
+# Una cadena ASCII nunca es codigo PPC: sin esto el analizador podria
+# continuar una funcion dentro de la cadena y emitir un cuerpo falso.
+[[invalid_instructions]]
+data = 0x82059704
+size = 24
+
+# --- 2) Hueco de padding NUL en .rdata (508 B) -------------------------------
+# VA 0x8201A0D4, 508 bytes, todos 0x00. Hueco entre estructuras de .rdata.
+# (El umbral data_region_threshold=16 ya lo cubre, pero se marca explicitamente
+#  porque es el hueco NUL mas grande verificado y no depende del barrido.)
+[[invalid_instructions]]
+data = 0x8201A0D4
+size = 508
+
+# --- 3) Hueco de padding NUL en .rdata (256 B) -------------------------------
+# VA 0x8202D9E0, 256 bytes, todos 0x00.
+[[invalid_instructions]]
+data = 0x8202D9E0
+size = 256
+
+# --- 4) Hueco de padding NUL en .rdata (256 B) -------------------------------
+# VA 0x8202DBE0, 256 bytes, todos 0x00.
+[[invalid_instructions]]
+data = 0x8202DBE0
+size = 256

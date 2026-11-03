@@ -1,0 +1,39 @@
+keybind_a = "Return"
+keybind_start = "Return"
+keybind_b = "Escape"
+keybind_y = "Space"
+
+gpu_plugin = "xenos"
+render_target_path_d3d12 = "rov"
+mrt_edram_used_range_clamp_to_min = false
+depth_float24_convert_in_pixel_shader = false
+d3d12_submit_on_primary_buffer_end = true
+d3d12_readback_resolve = "none"
+d3d12_readback_memexport = false
+swap_post_effect = "none"
+d3d12_queue_priority = "high"
+snorm16_render_target_full_range = true
+direct_host_resolve = false
+
+draw_resolution_scale_x = 1
+draw_resolution_scale_y = 1
+
+vsync = false
+video_mode_refresh_rate = 60.0
+d3d12_allow_variable_refresh_rate_and_tearing = true
+
+async_shader_compilation = true
+store_shaders = true
+d3d12_pipeline_creation_threads = -1
+
+clear_memory_page_state = false
+host_present_from_non_ui_thread = true
+d3d12_tiled_shared_memory = true
+
+texture_cache_memory_limit_soft = 384
+texture_cache_memory_limit_hard = 768
+texture_cache_memory_limit_soft_lifetime = 30
+texture_cache_memory_limit_render_to_texture = 24
+
+gpu_allow_invalid_fetch_constants = true
+log_level = "info"
