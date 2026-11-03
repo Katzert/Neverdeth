@@ -25,6 +25,27 @@ Dark mode nativo, 520×370, botones owner-draw carbón/bronce y banner NEVERDETH
 Perfiles de un clic, 10 pases del renderer con lógica positiva y F1/ESC desde
 cualquier ventana.
 
+## Rendimiento y Referencia para PCs de Gama Baja (30 FPS por defecto)
+
+El juego arranca **limitado a 30 FPS** en el pacer del host. El reloj interno del
+invitado (`0x82B31FBC`) sigue siempre a `0.0f`: si se le escribe otro valor, el motor
+Asura se queda esperando vblanks tras el tercer `[SWAP]`.
+
+Medido en la escena del hospital (RTX 2060, límite 160 W), 15 s de muestreo con
+`nvidia-smi` cada 500 ms:
+
+| Caso | Configuración | GPU | Potencia | ms/frame | FPS (bucle invitado) |
+|---|---|---|---|---|---|
+| 1 | 30 FPS + Bajo Consumo (16 flags OFF) | **25,3 %** | **40,0 W** | 30,87 | 32,4 |
+| 2 | 30 FPS + Calidad Original (todo ON) | **41,9 %** | **64,6 W** | 28,00 | 35,7 |
+| 3 | Ilimitado + Calidad Original | **97,3 %** | **97,9 W** | 10,51 | 95,2 |
+
+**Lectura:** el límite de 30 FPS baja la GPU del 97 % al 42 % con todo encendido
+(−57 puntos) y ahorra ~33 W; con el perfil Bajo Consumo se queda en el 25 % y 40 W.
+La columna FPS es el bucle del invitado; la presentación real la fija el pacer a 30.
+
+Reproducible con `python tools/bench_gpu.py 1|2|3`.
+
 ## Requisitos
 
 - Windows 10/11 x64, GPU con D3D12 y **ROV Tier 1+** (y *tiled resources* para el

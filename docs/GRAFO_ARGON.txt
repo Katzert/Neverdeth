@@ -2,8 +2,8 @@
 GRAFO DEL PROYECTO — NeverDead PC Recompilation (ReXGlue)
 ==============================================================================
 Fuente      : graphify-out/graph.json
-Nodos       : 701   Aristas: 861   Comunidades: 35
-Legibles    : 613 nodos con archivo de origen (src/ docs/ tools/ config/ + codegen)
+Nodos       : 703   Aristas: 867   Comunidades: 34
+Legibles    : 615 nodos con archivo de origen (src/ docs/ tools/ config/ + codegen)
 Codegen     : 88 nodos SIN archivo (arbol generated/, una sola mega-comunidad)
 
 COMO LEERLO
@@ -19,9 +19,9 @@ codigo recompilado, no se edita a mano y solo interesa por sus simbolos puente.
 ------------------------------------------------------------------------------
 1. RESUMEN
 ------------------------------------------------------------------------------
-Tipos de nodo : code=494, concept=176, rationale=25, document=6
-Procedencia   : ast=459, semantic=209, ?=33
-Relaciones    : defines=263, references=202, contains=101, calls=95, imports=77, conceptually_related_to=44, method=28, rationale_for=18
+Tipos de nodo : code=496, concept=176, rationale=25, document=6
+Procedencia   : ast=461, semantic=209, ?=33
+Relaciones    : defines=263, references=203, contains=103, calls=98, imports=77, conceptually_related_to=44, method=28, rationale_for=18
 
 2.2  Comunidades del codegen (generated/neverdead_default)
      El arbol generated/ NO esta en este grafo: lo excluye .gitignore.
@@ -32,9 +32,9 @@ Relaciones    : defines=263, references=202, contains=101, calls=95, imports=77,
 ------------------------------------------------------------------------------
   [  0] PPCContext / .SaveNonVolatiles()            211 legibles
         PPCContext(217), .SaveNonVolatiles()(1), cr0(1), cr1(1), cr2(1), cr3(1), cr4(1), cr5(1)
-  [  1] context.h / Register                         40 legibles (+8 de codegen)
+  [  1] context.h / Register                         40 legibles (+9 de codegen)
         context.h(21), Register(11), VRegister(11), CRRegister(8), XERRegister(5), .setFromMask()(3), compare()(2), PPCCRRegister(2)
-  [  4] PSO blocking compile stutter (Wait with in   27 legibles
+  [  5] PSO blocking compile stutter (Wait with in   27 legibles
         PSO blocking compile stutter (Wait with infinite timeout in EndSubmission)(4), ROV overdraw saturation at 95-99% GPU(4), Xenos color_exp_bias -= 5 (divide by 32) vs shader x32 multiplier(4), eDRAM emulation strategy question (compensate bias vs native ROV)(3), config/gap_chunks.toml and 8 unresolved interior entry points(3), N5 achieved - in-game 3D frame with geometry, lights and HUD(3), render_target_path_d3d12 = "rov" brightness fix(3), config/thunks.toml (148 vcall + 2 tail thunks)(3)
   [  7] RTV render-target path visual collapse / R   25 legibles
         RTV render-target path visual collapse(5), ROV canonical eDRAM emulation path(4), asura.py Advance Manager RS utility(4), Asura Engine (2012) static recompilation to x64(4), ROV empirical 3D in-game validation(3), RS archive container format (.asr/.sp/.MARE/.FXPT)(3), .rsmeta companions and manifest.json metadata(3), NdPatchAsyncPipelineCache (rexgpu-xenos.dll +0xEB030)(2)
@@ -42,32 +42,32 @@ Relaciones    : defines=263, references=202, contains=101, calls=95, imports=77,
         VdInitializeEngines (guest never calls it)(5), Region-dependent shift map (offset = rva - shift(rva))(5), Root bug: bodies decoded from flat offset (guest - 0x82000000)(5), Boot milestone chain M0-M9 (module load to GUI/PM4)(3), share_registers chunks emitted as standalone functions (class F2)(3), Real CRT ladder at guest 0x8278CD10 (__savegprlr_14)(3), src/nd_import_diag.h (Vd* import hooks)(2), MapBaseExeSections (1:1 .exe copy corrupted guest image)(2)
   [  8] Cuello de Botella CPU en Combate ReXGlue (   24 legibles
         Cuello de Botella CPU en Combate ReXGlue (80% CPU / 48 FPS)(6), sub_826B78D8 VdSwap(5), Configuracion neverdead.toml para RTX 2060 y 4 Hilos PSO(3), Causa A: Emulacion VS en CPU para Particulas No Recortadas(3), sub_82221988 FrameTimer_Update(2), NdVdSwapHook Telemetria Pasiva(2), PipelineCache::EndSubmission Asincrono (0ms Timeout)(2), 0x82B31FBC Clamp FPS Address(2)
-  [  3] neverdead_app.h / crash_diag.cpp             23 legibles (+20 de codegen)
+  [  3] neverdead_app.h / crash_diag.cpp             23 legibles (+18 de codegen)
         neverdead_app.h(14), crash_diag.cpp(10), nd_ke_tls_fix.h(8), nd_indirect_trap.h(7), NeverdeadVeh()(6), symline()(5), nd_indirect_guard.h(5), veh_log_loud()(4)
+  [  4] nd_hooks.cpp / NdEarlyInit()                 23 legibles (+7 de codegen)
+        nd_hooks.cpp(84), NdEarlyInit()(13), nd_alloc_near()(5), NdDumpAsuraCVarsOnce()(5), NdVdSetDisplayModeHook()(4), NdApplyFramePacer()(3), NdEnsureTimerResolution()(3), NdInitPacer()(3)
   [ 11] NeverDead Recompilation Optimization Graph   20 legibles
         NeverDead Recompilation Optimization Graph and Critical Source Bundle(9), Stage B Real Implementation of 68 inline import stubs (nd_import_diag.h)(7), NeverDead Asura WinMain engine frame loop (neverdead_main_loop / 0x823C5DAC)(5), REX_CALL_INDIRECT_FUNC dispatch override and OOB trap handler (nd_indirect_trap.h)(5), 60 FPS presentation unlock and display mode hooks (nd_hooks.h)(3), Optimization AST Subgraph of 250 recompiled symbols and call dependencies(3), Last-chance access-violation logger and VEH auto-repair (crash_diag.cpp)(2), Guest VA to Host memory translator (nd_guest_mem.cpp)(2)
-  [  2] nd_import_diag.h / REX_HOOK_RAW()            18 legibles (+26 de codegen)
+  [  2] nd_import_diag.h / REX_HOOK_RAW()            18 legibles (+27 de codegen)
         nd_import_diag.h(24), REX_HOOK_RAW()(17), LockManager(9), Slot(7), .GetOrCreate()(4), .WaitReady()(3), NdiDiag()(3), NdiResolve()(3)
-  [  5] nd_hooks.cpp / NdEarlyInit()                 18 legibles (+7 de codegen)
-        nd_hooks.cpp(82), NdEarlyInit()(12), nd_alloc_near()(5), NdVdSetDisplayModeHook()(4), NdApplyFramePacer()(3), NdInstallPaintAndPresentGate()(3), NdInstallPaintFromUIThreadHook()(3), NdInstallPaintReturnHook()(3)
   [ 13] FPSCRRegister / .getcsr()                    18 legibles
         FPSCRRegister(17), .getcsr()(4), .restoreGuestBits()(4), .setcsr()(4), .InitHost()(3), .loadFromHost()(2), .storeFromGuest()(2), .RestoreNonVolatiles()(2)
   [ 12] M0–M9 GPU bring-up milestone ladder / Stac   18 legibles
         M0–M9 GPU bring-up milestone ladder(5), Stack pointer drift: r1 climbs +0x70 per call(4), COMDAT-folded tail fragments executed in the caller's frame(3), functions.toml parent/share_registers chunk model(3), VdInitializeEngines is a kStub returning 1 in Xenia(3), sub_826B8620 — VdGetSystemCommandBuffer / VdSwap dispatch(2), sub_826BC390 — VdInitializeEngines caller(2), F0–F6 acceleration phases(2)
   [ 14] neverdead executable target / GATE 1 - Pre   17 legibles
         neverdead executable target(5), GATE 1 - Present at 60.0 real FPS verified by DXGI telemetry(5), src/crash_diag.cpp VEH observer(3), Contract: no problem is solved until verified in real gameplay(3), NEVERDEAD_SOURCES source list(2), VEH in crash_diag.cpp repairs faults in hot path (masks failures)(2), Rule: a log that cannot distinguish 'not called' from 'not instrumented' is not evidence(2), NEVERDEAD_REXGLUE_CMAKE / NEVERDEAD_GENERATED_DIR v2 tree switch(1)
+  [  9] NdConfigWndProc() / HWND                     16 legibles (+6 de codegen)
+        NdConfigWndProc()(15), NdGameSubclassWndProc()(7), NdApplyPreset()(6), NdCreateConfigControls()(6), NdSyncCheckboxesFromMemory()(6), NdToggleValue()(5), NdGetGameWindow()(4), NdHideConfigAndFocusGame()(4)
   [ 15] Gates 1–6 ReXGlue menu activation plan / A   16 legibles
         Gates 1–6 ReXGlue menu activation plan(4), Adversarial review verdict (conclusion right, evidence wrong)(4), NeverDead_base.exe region-dependent image shift (0 / +0x1000 / +0x2000)(3), CESA.bik SKU fallback to Front_End.bik(3), Shift-0 codegen regenerated from assets/default.xex(3), No-whack-a-mole principle (no symptomatic patches, no r3=0/1 stubs)(3), tools/derive_shift_map.py branch shift audit (32,222 / 90,901)(2), Oracle 3: Capstone static disassembler on NeverDead_base.exe(2)
-  [  9] NdConfigWndProc() / HWND                     15 legibles (+6 de codegen)
-        NdConfigWndProc()(15), NdGameSubclassWndProc()(7), NdApplyPreset()(6), NdIsDiagEnabled()(6), NdSyncCheckboxesFromMemory()(6), NdCreateConfigControls()(5), NdGetGameWindow()(4), NdHideConfigAndFocusGame()(4)
-  [ 10] NeverdeadApp / .Create()                     12 legibles (+9 de codegen)
-        NeverdeadApp(10), .Create()(4), .SetupGuestMemoryHooks()(4), nd_set_translate()(3), .OnPostLoadXexImage()(3), .OnPreSetup()(3), nd_guest_mem.cpp(3), nd_guest_mem_set()(2)
-  [ 17] NdVdSwapHook() / nd_present_stats_tick()      9 legibles (+1 de codegen)
-        NdVdSwapHook()(11), nd_present_stats_tick()(5), nd_restore_paint_mode()(4), nd_read_paint_mode()(3), NdPatchAsyncPipelineCache()(3), NdVdInitHook()(3), nd_refresh_threads()(2), nd_sample_threads()(2)
-  [ 19] NdSyncFpsClampMemory() / PPCRegister          9 legibles
+  [ 10] NeverdeadApp / .Create()                     13 legibles (+9 de codegen)
+        NeverdeadApp(10), .Create()(4), .SetupGuestMemoryHooks()(4), nd_translate_va()(3), nd_set_translate()(3), .OnPostLoadXexImage()(3), .OnPreSetup()(3), nd_guest_mem.cpp(3)
+  [ 18] NdSyncFpsClampMemory() / PPCRegister          9 legibles
         NdSyncFpsClampMemory()(8), PPCRegister(6), NdCheckFpsToggleKey()(4), NdForceIntervalOneHook()(4), NdInitFpsMode()(4), float_to_be_bits()(3), NdSetFpsLimitHook()(3), write_guest_be32()(3)
-  [ 18] apply_bink_branch_fix.py master patcher /     9 legibles
+  [ 17] apply_bink_branch_fix.py master patcher /     9 legibles
         apply_bink_branch_fix.py master patcher(3), Resource chunk iterator bridge sub_821E0FA0(3), apply_c67f8_fix.py orphan loop fix (sub_821C67F8 / sub_821C6598)(2), neverdead_epilogue_822CACC0 cross-block epilogue bridge(2), CMakeLists idempotent patch-target chain(2), src/nd_indirect_trap.h indirect dispatch guard(1), 10 s watchdog survival milestone ([SURVIVED], iteration #24)(1), 72-iteration telemetry progression (117 to 348,875 lines)(1)
+  [ 19] NdVdSwapHook() / NdIsDiagEnabled()            8 legibles (+1 de codegen)
+        NdVdSwapHook()(11), NdIsDiagEnabled()(6), nd_present_stats_tick()(5), nd_restore_paint_mode()(4), nd_read_paint_mode()(3), nd_refresh_threads()(2), nd_sample_threads()(2), NdCheckShouldPaintUI()(2)
   [ 21] NdProcCounters / nd_sample_counters()         7 legibles
         NdProcCounters(7), nd_sample_counters()(3), cpu_100ns(1), read_bytes(1), read_ops(1), write_bytes(1), write_ops(1)
   [ 20] NdThreadCpu / DWORD                           6 legibles (+2 de codegen)
@@ -78,23 +78,21 @@ Relaciones    : defines=263, references=202, contains=101, calls=95, imports=77,
         NdSwapChainVtable(4), nd_find_original_present()(3), NdPresentFn(3), original_present(1), vtable(1)
   [ 16] STDMETHODCALLTYPE NdCreateSwapChainForHwnd    4 legibles (+8 de codegen)
         STDMETHODCALLTYPE NdCreateSwapChainForHwndDetour()(10), STDMETHODCALLTYPE NdPresentHook()(8), NdHookSwapChainVtable()(3), nd_log_present_caller()(2)
-  [ 27] NdDumpAsuraCVarsOnce() / NdToggleValue()      4 legibles
-        NdDumpAsuraCVarsOnce()(5), NdToggleValue()(5), nd_translate_va()(3), read_guest_u8()(3)
   [ 26] kExpectVtable 0x8249EF98 warning is a fals    4 legibles
         kExpectVtable 0x8249EF98 warning is a false positive(3), ND_FILL_RDATA 1:1 injection bug (UTF-16 executed as code)(2), .rdata mapping shift (+0x1000 low / +0x2000 high)(2), 0x824DDF90 unregistered indirect call absorbed with r3=1(1)
   [ 25] nd_hooks instrumentation (NdVdInitHook / N    4 legibles
         nd_hooks instrumentation (NdVdInitHook / NdVdSwapHook)(3), config/mid_asm_hooks.toml (0x826BC3FC, 0x826B89A0)(1), VdSwap 1200 calls in 42 s (~30 FPS) telemetry(1), H1 — Vd* hooks dead due to -0x2000 offset drift(1)
   [ 24] .asrBE containers are big-endian RSFL (ext    4 legibles
         .asrBE containers are big-endian RSFL (extractor expects LE)(2), tools/extract_neverdead_assets.py (GDFX prefix extractor)(2), CESA.bik absent in this SKU (not a path bug)(1), Games on Demand container E7D01E468FBBCE3EC1F3.data (6.4 GB)(1)
-  [ 31] NdInstallPaintAndPresentGate / NdInstallPa    3 legibles
+  [ 30] NdInstallPaintAndPresentGate / NdInstallPa    3 legibles
         NdInstallPaintAndPresentGate / NdInstallPaintFromUIThreadHook(2), NdCheckShouldPaintUI force_paint restoration(1), real_present() present gate in src/nd_hooks.cpp(1)
-  [ 30] N0–N5 rendering milestone ladder / tools/n    3 legibles
+  [ 29] N0–N5 rendering milestone ladder / tools/n    3 legibles
         N0–N5 rendering milestone ladder(2), tools/nd_menu_test.py deterministic menu harness(1), Missing level asset envs/sp/sp_00_prologue.xbox360 (0xC000000F)(1)
-  [ 29] Host Direct Present (host_present_from_non    3 legibles
+  [ 28] Host Direct Present (host_present_from_non    3 legibles
         Host Direct Present (host_present_from_non_ui_thread)(2), Swapchain DXGI Flip Model Tearing(1), Estrato del Host Presenter (rexruntime.dll)(1)
-  [ 28] VEH auto-repair with PAGE_READWRITE fallba    3 legibles
+  [ 27] VEH auto-repair with PAGE_READWRITE fallba    3 legibles
         VEH auto-repair with PAGE_READWRITE fallback(2), VEH-LOUD diagnostic mode + ND_VEH_REPAIR=0(2), H4 — VEH masks real faults(2)
-  [ 32] H2 — 3D menu lost after tree regeneration     2 legibles
+  [ 31] H2 — 3D menu lost after tree regeneration     2 legibles
         H2 — 3D menu lost after tree regeneration (26 to 31 pipelines)(1), 26 vs 31 graphics pipelines discrepancy(1)
 
 ------------------------------------------------------------------------------
@@ -102,8 +100,8 @@ Relaciones    : defines=263, references=202, contains=101, calls=95, imports=77,
 ------------------------------------------------------------------------------
   patches/sdk/rex/ppc/context.h  [270]
      PPCContext, context.h, FPSCRRegister, Register, VRegister, CRRegister, PPCRegister, XERRegister, .getcsr(), .restoreGuestBits(), .setcsr(), .setFromMask(), .InitHost(), compare() … (+256)
-  src/nd_hooks.cpp  [81]
-     nd_hooks.cpp, NdConfigWndProc(), NdEarlyInit(), NdVdSwapHook(), STDMETHODCALLTYPE NdCreateSwapChainForHwndDetour(), NdThreadCpu, STDMETHODCALLTYPE NdPresentHook(), NdSyncFpsClampMemory(), NdProcCounters, NdRenderToggle, NdGameSubclassWndProc(), NdApplyPreset(), NdIsDiagEnabled(), NdSyncCheckboxesFromMemory() … (+67)
+  src/nd_hooks.cpp  [83]
+     nd_hooks.cpp, NdConfigWndProc(), NdEarlyInit(), NdVdSwapHook(), STDMETHODCALLTYPE NdCreateSwapChainForHwndDetour(), NdThreadCpu, STDMETHODCALLTYPE NdPresentHook(), NdSyncFpsClampMemory(), NdProcCounters, NdRenderToggle, NdGameSubclassWndProc(), NdIsDiagEnabled(), NdApplyPreset(), NdCreateConfigControls() … (+69)
   docs/grafo_optimizacion.txt  [20]
      NeverDead Recompilation Optimization Graph and Critical Source Bundle, Stage B Real Implementation of 68 inline import stubs (nd_import_diag.h), NeverDead Asura WinMain engine frame loop (neverdead_main_loop / 0x823C5DAC), REX_CALL_INDIRECT_FUNC dispatch override and OOB trap handler (nd_indirect_trap.h), 60 FPS presentation unlock and display mode hooks (nd_hooks.h), Optimization AST Subgraph of 250 recompiled symbols and call dependencies, Last-chance access-violation logger and VEH auto-repair (crash_diag.cpp), Guest VA to Host memory translator (nd_guest_mem.cpp), Non-intrusive indirect branch diagnostic guard (nd_indirect_guard.h), Host override for xboxkrnl#0x155 KeTlsSetValue (nd_ke_tls_fix.h), Custom memcpy unaligned tail handler neverdead_memcpy_8278AEEC, Native ReXGlue CRT Switches (NEVERDEAD_NATIVE_CRT_MEMCPY/HEAP), Canonical PPC register restoration via __restgprlr_21 (sub_8278BD7C), MmGetPhysicalAddress Xbox 360 direct map fallback (sub_827BDF64) … (+6)
   src/nd_import_diag.h  [18]
@@ -246,20 +244,20 @@ Relaciones    : defines=263, references=202, contains=101, calls=95, imports=77,
 5. HUBS (top 40 por grado, excluidos los nodos-macro tipo DEFINE_REX_FUNC())
 ------------------------------------------------------------------------------
    217  PPCContext                                   patches/sdk/rex/ppc/context.h
-    82  nd_hooks.cpp                                 src/nd_hooks.cpp
+    84  nd_hooks.cpp                                 src/nd_hooks.cpp
     24  nd_import_diag.h                             src/nd_import_diag.h
     21  context.h                                    patches/sdk/rex/ppc/context.h
     17  FPSCRRegister                                patches/sdk/rex/ppc/context.h
     15  NdConfigWndProc()                            src/nd_hooks.cpp
     14  neverdead_app.h                              src/neverdead_app.h
-    12  NdEarlyInit()                                src/nd_hooks.cpp
+    13  NdEarlyInit()                                src/nd_hooks.cpp
     11  Register                                     patches/sdk/rex/ppc/context.h
     11  VRegister                                    patches/sdk/rex/ppc/context.h
     11  NdVdSwapHook()                               src/nd_hooks.cpp
+    11  HWND                                         generated/
     10  NeverdeadApp                                 src/neverdead_app.h
     10  STDMETHODCALLTYPE NdCreateSwapChainForHwndDe src/nd_hooks.cpp
     10  crash_diag.cpp                               src/crash_diag.cpp
-    10  HWND                                         generated/
     10  cstdint                                      generated/
      9  LockManager                                  src/nd_import_diag.h
      9  NeverDead Recompilation Optimization Graph a docs/grafo_optimizacion.txt
@@ -275,16 +273,16 @@ Relaciones    : defines=263, references=202, contains=101, calls=95, imports=77,
      7  nd_indirect_trap.h                           src/nd_indirect_trap.h
      7  Stage B Real Implementation of 68 inline imp docs/grafo_optimizacion.txt
      7  logging                                      generated/
+     6  NdIsDiagEnabled()                            src/nd_hooks.cpp
      6  NeverdeadVeh()                               src/crash_diag.cpp
      6  NdApplyPreset()                              src/nd_hooks.cpp
-     6  NdIsDiagEnabled()                            src/nd_hooks.cpp
+     6  NdCreateConfigControls()                     src/nd_hooks.cpp
      6  NdSyncCheckboxesFromMemory()                 src/nd_hooks.cpp
      6  PPCRegister                                  patches/sdk/rex/ppc/context.h
      6  Cuello de Botella CPU en Combate ReXGlue (80 docs/INFORME_PARIDAD_XENIA_CANARY_ARGON.md
      5  XERRegister                                  patches/sdk/rex/ppc/context.h
      5  nd_present_stats_tick()                      src/nd_hooks.cpp
-     5  NdDumpAsuraCVarsOnce()                       src/nd_hooks.cpp
-     5  NdToggleValue()                              src/nd_hooks.cpp
+     5  symline()                                    src/crash_diag.cpp
 
 ==============================================================================
 Fin. Regenerar con: python tools/export_graph_txt.py

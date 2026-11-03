@@ -1322,7 +1322,11 @@ void NdPatchAsyncPipelineCache() {
   }
 }
 //=============================================================================
+static void NdEnsureTimerResolution();  // definido junto al pacer
+
 void NdEarlyInit() {
+  // Granularidad de 1 ms para el pacer (Sleep del hilo que presenta).
+  NdEnsureTimerResolution();
   // ORDEN: primero los parches de paint_mode (para que el primer
   // PaintFromUIThread acabe en modo 2), luego la captura del Presenter, el
   // gating temprano y el hook de Present.
@@ -1514,7 +1518,7 @@ void NdVdSwapHook() {
 //=============================================================================;
 // Control de Tasa de Refresco y Menu de Configuracion UI (F1)
 //=============================================================================;
-static std::atomic<float> g_fps_target{0.0f}; // 0.0f = Ilimitado por defecto
+static std::atomic<float> g_fps_target{30.0f}; // ALPHA: 30 FPS por defecto (gama baja)
 static std::atomic<bool> g_fps_mode_initialized{false};
 static std::atomic<bool> g_config_ui_open{false};
 
@@ -1522,6 +1526,20 @@ static std::atomic<bool> g_config_ui_open{false};
 static HANDLE g_pacer_timer = nullptr;
 static LARGE_INTEGER g_qpc_freq{};
 static int64_t g_last_pacer_qpc = 0;
+
+// timeBeginPeriod(1): sin esto Sleep() tiene granularidad de 15.6 ms y el
+// pacer de 33.3 ms se convierte en 46 ms. Idempotente (call_once).
+static void NdEnsureTimerResolution() {
+  static std::once_flag flag;
+  std::call_once(flag, []() {
+    HMODULE winmm = LoadLibraryA("winmm.dll");
+    if (winmm == nullptr) return;
+    using TimeBeginPeriodFn = UINT(WINAPI*)(UINT);
+    auto p_timeBeginPeriod =
+        reinterpret_cast<TimeBeginPeriodFn>(GetProcAddress(winmm, "timeBeginPeriod"));
+    if (p_timeBeginPeriod != nullptr) p_timeBeginPeriod(1);
+  });
+}
 
 static void NdInitPacer() {
   static std::once_flag flag;
@@ -1534,14 +1552,7 @@ static void NdInitPacer() {
     if (g_pacer_timer == nullptr) {
       g_pacer_timer = CreateWaitableTimerW(nullptr, FALSE, nullptr);
     }
-    HMODULE winmm = LoadLibraryA("winmm.dll");
-    if (winmm != nullptr) {
-      using TimeBeginPeriodFn = UINT(WINAPI*)(UINT);
-      auto p_timeBeginPeriod = reinterpret_cast<TimeBeginPeriodFn>(GetProcAddress(winmm, "timeBeginPeriod"));
-      if (p_timeBeginPeriod != nullptr) {
-        p_timeBeginPeriod(1);
-      }
-    }
+    NdEnsureTimerResolution();
   });
 }
 
@@ -1571,13 +1582,12 @@ static void NdApplyFramePacer() {
   int64_t remaining_ticks = target_time - cur_qpc.QuadPart;
   if (remaining_ticks > 0) {
     double remaining_ms = (static_cast<double>(remaining_ticks) * 1000.0) / static_cast<double>(g_qpc_freq.QuadPart);
-    if (remaining_ms > 1.5 && g_pacer_timer != nullptr) {
-      int64_t sleep_100ns = static_cast<int64_t>((remaining_ms - 1.0) * 10000.0);
-      LARGE_INTEGER due_time;
-      due_time.QuadPart = -sleep_100ns;
-      if (SetWaitableTimer(g_pacer_timer, &due_time, 0, nullptr, nullptr, FALSE)) {
-        WaitForSingleObject(g_pacer_timer, INFINITE);
-      }
+    // Espera hibrida: si queda mas de 2 ms se duerme de verdad (libera CPU y
+    // deja respirar a la cola de envio de la GPU); el ultimo tramo se hace con
+    // spin de precision. Con timeBeginPeriod(1) Sleep() tiene granularidad ~1 ms.
+    if (remaining_ms > 2.0) {
+      const DWORD sleep_ms = static_cast<DWORD>(remaining_ms - 1.5);
+      if (sleep_ms > 0) Sleep(sleep_ms);
     }
     do {
       YieldProcessor();
@@ -1754,6 +1764,20 @@ static void NdSetDarkTitleBar(HWND hwnd) {
   }
 }
 
+// Tema oscuro nativo para COMBOBOX (Win10 1809+). Si el sistema no lo tiene,
+// cae al aspecto clasico con WM_CTLCOLORLISTBOX.
+static void NdApplyDarkComboTheme(HWND ctrl) {
+  using Fn = HRESULT(WINAPI*)(HWND, LPCWSTR, LPCWSTR);
+  static Fn s_fn = [] {
+    HMODULE m = GetModuleHandleW(L"uxtheme.dll");
+    if (m == nullptr) m = LoadLibraryW(L"uxtheme.dll");
+    return m ? reinterpret_cast<Fn>(GetProcAddress(m, "SetWindowTheme")) : nullptr;
+  }();
+  if (s_fn != nullptr && ctrl != nullptr) {
+    s_fn(ctrl, L"DarkMode_CFD", nullptr);
+  }
+}
+
 static void NdDisableTheme(HWND ctrl) {
   using Fn = HRESULT(WINAPI*)(HWND, LPCWSTR, LPCWSTR);
   static Fn s_fn = [] {
@@ -1874,7 +1898,7 @@ static void NdCreateConfigControls(HWND hwnd) {
   SendMessageW(cbWnd, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"Ventana 1080p"));
   SendMessageW(cbWnd, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"Sin Bordes (Fullscreen)"));
   SendMessageW(cbWnd, CB_SETCURSEL, 0, 0);
-  NdDisableTheme(cbWnd);
+  NdApplyDarkComboTheme(cbWnd);
 
   HWND lblFps = CreateWindowW(L"STATIC", L"FPS:", WS_CHILD | WS_VISIBLE, 275, 65, 35, 20, hwnd,
                               nullptr, nullptr, nullptr);
@@ -1887,8 +1911,8 @@ static void NdCreateConfigControls(HWND hwnd) {
   SendMessageW(cbFps, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"Ilimitado"));
   SendMessageW(cbFps, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"60 FPS"));
   SendMessageW(cbFps, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"30 FPS"));
-  SendMessageW(cbFps, CB_SETCURSEL, 0, 0);
-  NdDisableTheme(cbFps);
+  SendMessageW(cbFps, CB_SETCURSEL, 2, 0);  // ALPHA: 30 FPS por defecto
+  NdApplyDarkComboTheme(cbFps);
 
   // --- Fila 2: perfiles de un clic ---
   HWND btnHigh = CreateWindowW(L"BUTTON", L"Perfil: Calidad Original",
@@ -2208,7 +2232,7 @@ static void NdInitFpsMode() {
   // 0.0f = sin limite. Es el modo con el que el motor Asura SI avanza: con
   // 60.0f el invitado se queda esperando vblanks que nunca llegan tras el
   // primer VdSwap y la ventana queda en negro (ver docs/HANDOFF).
-  float target = 0.0f;
+  float target = 30.0f;  // ALPHA: linea base para PCs de gama baja
   const char* env = std::getenv("ND_FPS_LIMIT");
   if (env != nullptr) {
     const float v = static_cast<float>(std::atof(env));
