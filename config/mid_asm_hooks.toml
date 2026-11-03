@@ -15,9 +15,20 @@
 address = 0x826BC3FC
 name = "NdVdInitHook"
 
+# r31 = device D3D (sub_826B8620 hace "mr r31,r3" en el prologo). Se pasa para
+# que la sonda del ring PM4 (ND_RING=1) pueda leer [dev+48] sin parchear nada.
 [[midasm_hook]]
 address = 0x826B89A0
 name = "NdVdSwapHook"
+registers = ["r31"]
+
+# Instruccion siguiente a "bl VdSwap" (addi r11,r30,256): el frame ya esta
+# encolado y el presentador puede consumirlo. Aqui SI es seguro frenar al
+# invitado (antes del bl se estrangula al presentador -> 39->17 FPS medido).
+[[midasm_hook]]
+address = 0x826B89A4
+name = "NdVdSwapPostHook"
+registers = ["r31"]
 
 # VdSetDisplayMode: r3 = puntero al X_VIDEO_MODE que el invitado fija.
 [[midasm_hook]]

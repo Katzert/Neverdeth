@@ -10,7 +10,12 @@
 #include <rex/ppc.h>
 
 void NdVdInitHook();
-void NdVdSwapHook();
+// r31 = puntero al device D3D del invitado (ver sub_826B8620: mr r31,r3).
+// Se pasa desde el midasm hook (registers = ["r31"]) para poder leer el ring
+// PM4 sin tocar generated/.
+void NdVdSwapHook(PPCRegister& r31);
+// Instruccion siguiente al bl VdSwap: el frame ya esta encolado.
+void NdVdSwapPostHook(PPCRegister& r31);
 void NdVdSetDisplayModeHook(PPCRegister& r3);
 
 // Hooks para desbloqueo de 60 FPS

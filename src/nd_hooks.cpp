@@ -62,6 +62,20 @@ std::atomic<uint64_t> g_present_total{0};
 std::atomic<uint64_t> g_present_logged_allowed{0};
 std::atomic<uint64_t> g_present_logged_skipped{0};
 std::atomic<double> g_present_fps{0.0};
+// Back-pressure invitado <-> presentador (Tarea 4, v11).
+// El invitado solo puede ir UN frame por delante de lo presentado: eso es lo
+// que convierte los 35.7 FPS del bucle guest en 30.0 reales sin tocar el reloj
+// interno del motor (0x82B31FBC sigue siempre a 0.0f).
+std::atomic<uint64_t> g_frames_submitted{0};
+std::atomic<uint64_t> g_frames_presented{0};
+std::atomic<uint64_t> g_throttle_waits{0};
+std::atomic<uint64_t> g_throttle_timeouts{0};
+std::atomic<uint32_t> g_present_thread_id{0};
+std::atomic<int> g_throttle_timeout_streak{0};
+std::atomic<bool> g_throttle_disabled{false};
+// El invitado ya marca el ritmo (pacing post-swap): el pacer del
+// presentador debe ceder, o dos pacers a 30 Hz baten entre si.
+std::atomic<bool> g_guest_pacing_active{false};
 // Sin mutex en la ruta critica de Present: se hacia lock/unlock en CADA
 // frame. La ventana de estadistica se cierra con un CAS sobre el instante de
 // inicio, asi que como mucho se pierde una muestra de diagnostico.
@@ -953,13 +967,20 @@ extern "C" HRESULT STDMETHODCALLTYPE NdPresentHook(IDXGISwapChain* swap_chain,
 
   g_present_total.fetch_add(1, std::memory_order_relaxed);
   g_present_allowed.fetch_add(1, std::memory_order_relaxed);
+  g_present_thread_id.store(GetCurrentThreadId(), std::memory_order_relaxed);
   nd_present_stats_tick(true, now);
   // Pacer del host en el hilo que presenta (no en el hilo del invitado).
   NdApplyFramePacer();
   // Presentacion inmediata sin bloqueo de VBlank fisico (igual que Xenia Canary vsync = false)
   const UINT present_sync = 0;
   const UINT present_flags = flags | DXGI_PRESENT_ALLOW_TEARING;
-  return real_present(swap_chain, present_sync, present_flags);
+  const HRESULT present_result = real_present(swap_chain, present_sync, present_flags);
+  if (SUCCEEDED(present_result)) {
+    // Contador de presents reales para diagnostico (guest vs presentador).
+    // Solo cuenta un present real: si DXGI falla, el frame no se muestra.
+    g_frames_presented.fetch_add(1, std::memory_order_release);
+  }
+  return present_result;
 }
 void NdHookSwapChainVtable(IDXGISwapChain* swap_chain) {
   void** vtable = *reinterpret_cast<void***>(swap_chain);
@@ -1377,8 +1398,153 @@ void NdVdInitHook() {
 static void NdApplyFramePacer();
 static void NdCheckFpsToggleKey();
 static void NdDumpAsuraCVarsOnce();
+static bool NdPacerActive();
 
-void NdVdSwapHook() {
+//=============================================================================
+// Sonda del ring PM4 (ND_RING=1) — solo lectura, no altera el juego
+//=============================================================================
+// El driver D3D del invitado va enlazado estaticamente (rango 0x826B0000) y
+// escribe sus comandos en un primary buffer. sub_826B5548 es su asignador:
+//     r11 = [dev+48]                          ; puntero de escritura
+//     r10 = [dev+52]                          ; fin del buffer
+//     if (r11 + n*4 > r10) sub_826B6B38(dev)  ; ring lleno -> volcar/crecer
+//     return [dev+48]
+// VdSwap se invoca justo despues de reservar 64 dwords (256 B) para el paquete
+// de swap, y el puntero [dev+48] solo avanza DESPUES del swap
+// (`stw r11,48(r31)` con r11 = r30+256 en sub_826B8620). Por tanto, en el hook
+// [dev+48] marca el final exacto de los comandos de este frame.
+//
+// Formato PM4 (rexglue_sdk_src/src/graphics/command_processor.cpp:691-760):
+//   type 0: count=((h>>16)&0x3FFF)+1 valores, base=h&0x7FFF,
+//           write_one=(h>>15)&1  -> avance 1+count
+//   type 1: dos registros         -> avance 3
+//   type 2: NOP                   -> avance 1
+//   type 3: opcode=(h>>8)&0x7F, count=((h>>16)&0x3FFF)+1 -> avance 1+count
+//           bit 0 = paquete predicado por bin (bin_select & bin_mask)
+//=============================================================================
+static bool NdRingEnabled() {
+  static const bool s = (std::getenv("ND_RING") != nullptr);
+  return s;
+}
+
+static inline uint32_t nd_be32(const uint8_t* p) {
+  return (uint32_t(p[0]) << 24) | (uint32_t(p[1]) << 16) | (uint32_t(p[2]) << 8) |
+         uint32_t(p[3]);
+}
+
+static uint32_t g_ring_ops[128];      // histograma de opcodes type-3
+static uint32_t g_ring_reg_hits[4];   // [0]=0x2000 [1]=0x2208 [2]=otros
+
+static void NdRingFlush(uint64_t swap_index) {
+  char ops[220] = {};
+  size_t used = 0;
+  for (uint32_t op = 0; op < 128; ++op) {
+    if (g_ring_ops[op] == 0) continue;
+    const int w = snprintf(ops + used, sizeof(ops) - used, "%s0x%02X:%u",
+                           used ? " " : "", op, g_ring_ops[op]);
+    if (w <= 0 || used + size_t(w) >= sizeof(ops)) break;
+    used += size_t(w);
+  }
+  REXLOG_INFO("neverdead: [RING] swap #{} | opcodes type-3 del frame: {}", swap_index,
+              ops[0] ? ops : "(ninguno)");
+  std::memset(g_ring_ops, 0, sizeof(g_ring_ops));
+  std::memset(g_ring_reg_hits, 0, sizeof(g_ring_reg_hits));
+}
+
+static void NdRingProbe(uint32_t device, uint64_t swap_index) {
+  if (!NdRingEnabled() || device == 0 || g_translate == nullptr) {
+    return;
+  }
+  const uint8_t* dev = g_translate(device);
+  if (dev == nullptr) {
+    return;
+  }
+  const uint32_t wr = nd_be32(dev + 48);
+  static uint32_t s_last = 0;
+  // Primer frame, wrap del ring o salto anomalo: reanclar sin muestrear.
+  if (s_last == 0 || wr <= s_last || (wr - s_last) > (4u << 20)) {
+    s_last = wr;
+    return;
+  }
+  const uint8_t* p = g_translate(s_last);
+  if (p == nullptr) {
+    s_last = wr;
+    return;
+  }
+  const uint32_t dwords = (wr - s_last) >> 2;
+  uint32_t i = 0;
+  uint32_t draws = 0, resolves = 0, bin_mask = 0, bin_select = 0, predicated = 0;
+  uint32_t swaps = 0, reg_writes = 0, surface_info = 0, modecontrol = 0;
+  while (i < dwords) {
+    const uint32_t h = nd_be32(p + (i << 2));
+    const uint32_t type = h >> 30;
+    if (type == 3u) {
+      const uint32_t opcode = (h >> 8) & 0x7F;
+      const uint32_t count = ((h >> 16) & 0x3FFF) + 1;
+      if (i + 1 + count > dwords) break;
+      if ((h & 1u) != 0) ++predicated;
+      switch (opcode) {
+        case 0x22:  // PM4_DRAW_INDX
+        case 0x34:  // PM4_DRAW_INDX_BIN
+        case 0x35:  // PM4_DRAW_INDX_2_BIN
+        case 0x36:  // PM4_DRAW_INDX_2
+          ++draws;
+          break;
+        case 0x50:  // PM4_SET_BIN_MASK  (tiling)
+          ++bin_mask;
+          break;
+        case 0x51:  // PM4_SET_BIN_SELECT (tiling)
+          ++bin_select;
+          break;
+        case 0x2A:  // PM4_XE_SWAP
+          ++swaps;
+          break;
+        default:
+          break;
+      }
+      ++g_ring_ops[opcode];
+      i += 1 + count;
+    } else if (type == 0u) {
+      const uint32_t count = ((h >> 16) & 0x3FFF) + 1;
+      const uint32_t base = h & 0x7FFF;
+      const bool one = ((h >> 15) & 1u) != 0;
+      if (i + 1 + count > dwords) break;
+      for (uint32_t m = 0; m < count; ++m) {
+        const uint32_t reg = one ? base : base + m;
+        const uint32_t val = nd_be32(p + ((i + 1 + m) << 2));
+        ++reg_writes;
+        if (reg == 0x2000) {  // RB_SURFACE_INFO
+          surface_info = val;
+          ++g_ring_reg_hits[0];
+        } else if (reg == 0x2208) {  // RB_MODECONTROL
+          modecontrol = val;
+          ++g_ring_reg_hits[1];
+          if ((val & 7u) == 6u) ++resolves;  // EdramMode::kCopy
+        } else {
+          ++g_ring_reg_hits[2];
+        }
+      }
+      i += 1 + count;
+    } else if (type == 1u) {
+      if (i + 3 > dwords) break;
+      i += 3;
+    } else {
+      ++i;  // type 2 NOP
+    }
+  }
+  s_last = wr;
+  if ((swap_index % 60) == 1) {
+    REXLOG_INFO(
+        "neverdead: [RING] swap #{} | {} dwords | draws={} resolves={} "
+        "bin_mask={} bin_select={} pred={} regs={} swaps={} | msaa={} pitch={} "
+        "modecontrol=0x{:X} surface=0x{:X}",
+        swap_index, dwords, draws, resolves, bin_mask, bin_select, predicated, reg_writes,
+        swaps, (surface_info >> 16) & 3u, surface_info & 0x3FFFu, modecontrol, surface_info);
+    NdRingFlush(swap_index);
+  }
+}
+
+void NdVdSwapHook(PPCRegister& r31) {
   const uint64_t n = g_vd_swap_calls.fetch_add(1, std::memory_order_relaxed) + 1;
   // BLINDAJE: el hilo del invitado solo presenta con paint_mode_ == 2. Si algo
   // lo dejo en 0/1, se corrige aqui (antes de EarlyInit) para no arrastrar el
@@ -1513,6 +1679,9 @@ void NdVdSwapHook() {
     NdDumpAsuraCVarsOnce();
   }
   if (diag && n <= 3) { REXLOG_INFO("neverdead: [SWAP] SALIDA #{} (VdSwap retorno al invitado)", n); }
+  // Sonda forense del ring PM4 (solo con ND_RING=1): cuenta draws, resolves y
+  // predicacion por bin realmente emitidos por el driver D3D del invitado.
+  NdRingProbe(r31.u32, n);
 }
 //=============================================================================;
 //=============================================================================;
@@ -1600,6 +1769,90 @@ static void NdApplyFramePacer() {
   } else {
     g_last_pacer_qpc = target_time;
   }
+}
+
+static bool NdPacerActive() {
+  return g_fps_target.load(std::memory_order_relaxed) > 0.0f;
+}
+
+//=============================================================================
+// Pacing del invitado DESPUES del swap (Tarea 4, v11)
+//=============================================================================
+// Por que aqui y no antes de __imp__VdSwap: medido en este equipo, frenar antes
+// del bl VdSwap estrangula al presentador (39.4 -> 16.8 FPS y 89 picos de
+// 150 ms en una ventana de 300 frames). El Present del host se dispara a partir
+// del swap del invitado, asi que esperar alli crea una dependencia circular que
+// solo rompe el timeout. Justo despues del bl el frame ya esta encolado: dormir
+// aqui retrasa el siguiente frame sin bloquear al presentador.
+//
+// Es pacing por tiempo, no por contadores: no depende de que el presentador
+// avance, asi que no puede interbloquearse. 0x82B31FBC sigue siempre a 0.0f.
+//=============================================================================
+static void NdPaceGuestFrame(uint64_t swap_index) {
+  // OPT-IN: por defecto NO se frena al invitado. Medido en este equipo, el
+  // presentador del host esta acoplado al swap del invitado y cualquier pacing
+  // del invitado baja la tasa de presents (30.0 -> 22.0) aunque el bucle del
+  // invitado quede clavado en 30.0. Para reproducir el experimento:
+  //     set ND_GUEST_THROTTLE=1
+  static const bool s_env_on = []() {
+    const char* v = std::getenv("ND_GUEST_THROTTLE");
+    return v != nullptr && v[0] == '1';
+  }();
+  if (!s_env_on || swap_index <= 60 || !NdPacerActive()) {
+    return;
+  }
+  float fps = g_fps_target.load(std::memory_order_relaxed);
+  if (fps <= 0.0f || g_qpc_freq.QuadPart <= 0) {
+    return;
+  }
+  // Headroom: si el invitado va EXACTAMENTE al mismo ritmo que el pacer del
+  // presentador, los dos relojes derivan y el presentador se salta ~1 de cada
+  // 4 despertares (medido: guest 30.0 / present 22.0). Yendo un 5% por delante
+  // siempre hay un frame nuevo esperando y el presentador clava los 30.0.
+  static const float s_headroom = []() {
+    const char* v = std::getenv("ND_GUEST_HEADROOM_PCT");
+    const float pct = (v != nullptr) ? static_cast<float>(std::atof(v)) : 5.0f;
+    return 1.0f + (pct > 0.0f ? pct : 0.0f) / 100.0f;
+  }();
+  fps *= s_headroom;
+  const int64_t target_ticks =
+      static_cast<int64_t>(static_cast<double>(g_qpc_freq.QuadPart) / fps);
+  static int64_t s_next = 0;
+  LARGE_INTEGER now;
+  QueryPerformanceCounter(&now);
+  // Primera vez, o venimos de un paron largo: reanclar sin deuda.
+  if (s_next == 0 || now.QuadPart - s_next > target_ticks) {
+    s_next = now.QuadPart;
+  }
+  const int64_t remaining = s_next - now.QuadPart;
+  if (remaining > 0) {
+    const double remaining_ms =
+        (static_cast<double>(remaining) * 1000.0) / static_cast<double>(g_qpc_freq.QuadPart);
+    if (remaining_ms > 2.0) {
+      const DWORD sleep_ms = static_cast<DWORD>(remaining_ms - 1.5);
+      if (sleep_ms > 0) {
+        Sleep(sleep_ms);
+      }
+    }
+    LARGE_INTEGER spin;
+    do {
+      YieldProcessor();
+      QueryPerformanceCounter(&spin);
+    } while (spin.QuadPart < s_next);
+  }
+  s_next += target_ticks;
+  QueryPerformanceCounter(&now);
+  if (now.QuadPart - s_next > target_ticks) {
+    s_next = now.QuadPart;
+  }
+  // A partir de aqui el ritmo lo marca el invitado: el pacer del presentador
+  // se retira para no batir contra este.
+  g_guest_pacing_active.store(true, std::memory_order_relaxed);
+}
+
+void NdVdSwapPostHook(PPCRegister& r31) {
+  (void)r31;
+  NdPaceGuestFrame(g_vd_swap_calls.load(std::memory_order_relaxed));
 }
 
 static void NdDumpAsuraCVarsOnce() {
