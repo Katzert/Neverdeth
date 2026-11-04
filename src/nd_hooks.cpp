@@ -29,10 +29,12 @@
 // un call-site adivinado de rexruntime.dll (ver NdInstallPresentGate).
 #include <dxgi.h>
 #include <dxgi1_2.h>
+#include <d3d12.h>
 #endif
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <condition_variable>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -55,6 +57,16 @@ static std::atomic<bool>& g_unlock_fps = g_unlock_framerate;
 
 bool NdIsIn3dGameplay() {
   return g_in_3d_gameplay.load(std::memory_order_relaxed);
+}
+
+static inline uint64_t NdFnv1a64(const void* data, size_t len) {
+  const uint8_t* ptr = reinterpret_cast<const uint8_t*>(data);
+  uint64_t h = 0xCBF29CE484222325ULL;
+  for (size_t i = 0; i < len; ++i) {
+    h ^= ptr[i];
+    h *= 0x100000001B3ULL;
+  }
+  return h;
 }
 
 bool NdIsFpsUnlocked() {
@@ -560,6 +572,11 @@ void NdInstallSetPaintModeHook() {
   // push rsi / push rdi / push rbx / sub rsp,20 / cmp [rcx+A8],edx / jne
   static const uint8_t kExpected[15] = {0x56, 0x57, 0x53, 0x48, 0x83, 0xEC, 0x20, 0x39,
                                         0x91, 0xA8, 0x00, 0x00, 0x00, 0x75, 0x08};
+  if ((entry[0] == 0xC7 && entry[1] == 0x41 && entry[2] == 0x18 && entry[3] == 0x00 && entry[4] == 0x00) ||
+      entry[0] == 0xE9) {
+    REXLOG_INFO("neverdead: [PAINT-MODE] SetPaintModeFromUIThread ya validado/parcheado (rexruntime+0x{:X})", kRva);
+    return;
+  }
   if (std::memcmp(entry, kExpected, sizeof(kExpected)) != 0) {
     REXLOG_ERROR(
         "neverdead: [PAINT-MODE] bytes inesperados en rexruntime+0x{:X}: "
@@ -671,6 +688,10 @@ void NdPatchInlinedPaintMode() {
   uint8_t* mov_site = base + kMovRva;
   uint8_t* jne_site = base + kJneRva;
   static const uint8_t kMovExpected[6] = {0x41, 0xBF, 0x01, 0x00, 0x00, 0x00};
+  if (mov_site[2] == 0x02 || mov_site[0] == 0xA8 || mov_site[0] == 0xE9) {
+    REXLOG_INFO("neverdead: [PAINT-MODE] copia inline de GetDesiredPaintMode ya validada/parcheada (rexruntime+0x{:X})", kMovRva);
+    return;
+  }
   if (std::memcmp(mov_site, kMovExpected, sizeof(kMovExpected)) != 0 || jne_site[0] != 0x75 ||
       jne_site[1] != 0x18) {
     REXLOG_ERROR(
@@ -755,6 +776,10 @@ void NdInstallPaintFromUIThreadHook() {
   uint8_t* entry = base + kRva;
   // push r15 / push r14 / push rsi
   static const uint8_t kExpected[5] = {0x41, 0x57, 0x41, 0x56, 0x56};
+  if (entry[0] == 0xE9 || (entry[0] == 0xC7 && entry[1] == 0x46 && entry[2] == 0x30)) {
+    REXLOG_INFO("neverdead: [PAINT-GATE] Puerta temprana activa/validada en Presenter::PaintFromUIThread (rexruntime+0x{:X})", kRva);
+    return;
+  }
   if (std::memcmp(entry, kExpected, sizeof(kExpected)) != 0) {
     REXLOG_ERROR("neverdead: [PAINT-GATE] bytes inesperados en PaintFromUIThread+0x{:X}; no se instala",
                  kRva);
@@ -835,6 +860,10 @@ void NdInstallPaintAndPresentGate() {
   // (push rbp / push r15 / push r14 / push r13 / push r12 / push rsi / push rdi / push rbx)
   static const uint8_t kExpected[12] = {
       0x55, 0x41, 0x57, 0x41, 0x56, 0x41, 0x55, 0x41, 0x54, 0x56, 0x57, 0x53};
+  if (entry[0] == 0xE9 || (entry[0] == 0x48 && entry[1] == 0x89 && entry[2] == 0xD0)) {
+    REXLOG_INFO("neverdead: [PAINT-GATE] Puerta de prologo ya activa/optimizada en D3D12Presenter::PaintAndPresent (rexruntime+0x{:X})", kRva);
+    return;
+  }
   if (std::memcmp(entry, kExpected, sizeof(kExpected)) != 0) {
     REXLOG_ERROR(
         "neverdead: [PAINT-GATE] bytes inesperados en D3D12Presenter::PaintAndPresent+0x{:X}; no se instala",
@@ -934,6 +963,10 @@ void NdInstallPaintReturnHook() {
   uint8_t* site = base + kRva;
   static const uint8_t kExpected[16] = {0x48, 0x89, 0xF1, 0xC6, 0x81, 0xC0, 0x00, 0x00,
                                         0x00, 0x00, 0x48, 0x83, 0xC4, 0x20, 0x5E, 0xC3};
+  if (site[0] == 0xE9 || (site[0] == 0xBD && site[1] == 0xA8)) {
+    REXLOG_INFO("neverdead: [PAINT-MODE] epilogo de Paint ya validado/parcheado (rexruntime+0x{:X})", kRva);
+    return;
+  }
   if (std::memcmp(site, kExpected, sizeof(kExpected)) != 0) {
     REXLOG_ERROR("neverdead: [PAINT-MODE] bytes inesperados en el epilogo de Paint (rexruntime+0x{:X}); no se instala",
                  kRva);
@@ -1242,6 +1275,213 @@ void nd_install_factory_hook() {
       "(vtable[{}]) en dxgi.dll; Present se interceptara al crear el swap chain",
       kCreateSwapChainForHwndIndex);
 }
+
+//=============================================================================
+// Intercepcion D3D12: ID3D12Device::CreateGraphicsPipelineState (vtable[10])
+//=============================================================================
+using NdCreateGraphicsPipelineStateFn = HRESULT(STDMETHODCALLTYPE*)(
+    ID3D12Device* This,
+    const D3D12_GRAPHICS_PIPELINE_STATE_DESC* pDesc,
+    REFIID riid,
+    void** ppPipelineState);
+
+static NdCreateGraphicsPipelineStateFn g_real_create_graphics_pipeline_state = nullptr;
+
+struct NdPsoCacheEntry {
+  ID3D12PipelineState* pso{nullptr};
+  bool ready{false};
+};
+
+static std::mutex g_d3d12_pso_mtx;
+static std::unordered_map<uint64_t, NdPsoCacheEntry> g_d3d12_pso_map;
+static std::atomic<bool> g_d3d12_worker_active{false};
+
+struct NdPsoAsyncJob {
+  ID3D12Device* device{nullptr};
+  uint64_t hash{0};
+  D3D12_GRAPHICS_PIPELINE_STATE_DESC desc{};
+  std::vector<uint8_t> vs_code;
+  std::vector<uint8_t> ps_code;
+  std::vector<uint8_t> gs_code;
+  std::vector<uint8_t> ds_code;
+  std::vector<uint8_t> hs_code;
+  IID riid{};
+};
+
+static std::mutex g_d3d12_queue_mtx;
+static std::vector<NdPsoAsyncJob> g_d3d12_pso_queue;
+static std::condition_variable g_d3d12_pso_cv;
+
+static void NdD3D12PsoWorkerThread() {
+  SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_BELOW_NORMAL);
+  while (g_d3d12_worker_active.load(std::memory_order_relaxed)) {
+    NdPsoAsyncJob job;
+    {
+      std::unique_lock<std::mutex> lk(g_d3d12_queue_mtx);
+      g_d3d12_pso_cv.wait(lk, []() {
+        return !g_d3d12_pso_queue.empty() || !g_d3d12_worker_active.load(std::memory_order_relaxed);
+      });
+      if (!g_d3d12_worker_active.load(std::memory_order_relaxed) && g_d3d12_pso_queue.empty()) {
+        break;
+      }
+      job = std::move(g_d3d12_pso_queue.front());
+      g_d3d12_pso_queue.erase(g_d3d12_pso_queue.begin());
+    }
+
+    if (!job.vs_code.empty()) {
+      job.desc.VS.pShaderBytecode = job.vs_code.data();
+      job.desc.VS.BytecodeLength = job.vs_code.size();
+    }
+    if (!job.ps_code.empty()) {
+      job.desc.PS.pShaderBytecode = job.ps_code.data();
+      job.desc.PS.BytecodeLength = job.ps_code.size();
+    }
+    if (!job.gs_code.empty()) {
+      job.desc.GS.pShaderBytecode = job.gs_code.data();
+      job.desc.GS.BytecodeLength = job.gs_code.size();
+    }
+    if (!job.ds_code.empty()) {
+      job.desc.DS.pShaderBytecode = job.ds_code.data();
+      job.desc.DS.BytecodeLength = job.ds_code.size();
+    }
+    if (!job.hs_code.empty()) {
+      job.desc.HS.pShaderBytecode = job.hs_code.data();
+      job.desc.HS.BytecodeLength = job.hs_code.size();
+    }
+
+    ID3D12PipelineState* compiled_pso = nullptr;
+    if (g_real_create_graphics_pipeline_state && job.device) {
+      HRESULT hr = g_real_create_graphics_pipeline_state(
+          job.device, &job.desc, job.riid, reinterpret_cast<void**>(&compiled_pso));
+      if (SUCCEEDED(hr) && compiled_pso) {
+        std::lock_guard<std::mutex> lk(g_d3d12_pso_mtx);
+        g_d3d12_pso_map[job.hash].pso = compiled_pso;
+        g_d3d12_pso_map[job.hash].ready = true;
+      }
+    }
+  }
+}
+
+extern "C" HRESULT STDMETHODCALLTYPE NdCreateGraphicsPipelineStateDetour(
+    ID3D12Device* This,
+    const D3D12_GRAPHICS_PIPELINE_STATE_DESC* pDesc,
+    REFIID riid,
+    void** ppPipelineState) {
+
+  if (!pDesc || !ppPipelineState || !g_real_create_graphics_pipeline_state) {
+    if (g_real_create_graphics_pipeline_state) {
+      return g_real_create_graphics_pipeline_state(This, pDesc, riid, ppPipelineState);
+    }
+    return E_FAIL;
+  }
+
+  uint64_t hash = NdFnv1a64(pDesc, sizeof(D3D12_GRAPHICS_PIPELINE_STATE_DESC));
+  if (pDesc->VS.pShaderBytecode && pDesc->VS.BytecodeLength) {
+    hash ^= NdFnv1a64(pDesc->VS.pShaderBytecode, pDesc->VS.BytecodeLength);
+  }
+  if (pDesc->PS.pShaderBytecode && pDesc->PS.BytecodeLength) {
+    hash ^= NdFnv1a64(pDesc->PS.pShaderBytecode, pDesc->PS.BytecodeLength);
+  }
+
+  {
+    std::lock_guard<std::mutex> lk(g_d3d12_pso_mtx);
+    auto it = g_d3d12_pso_map.find(hash);
+    if (it != g_d3d12_pso_map.end() && it->second.ready && it->second.pso != nullptr) {
+      it->second.pso->AddRef();
+      *ppPipelineState = it->second.pso;
+      return S_OK;
+    }
+  }
+
+  if (g_in_3d_gameplay.load(std::memory_order_relaxed)) {
+    bool already_enqueued = false;
+    {
+      std::lock_guard<std::mutex> lk(g_d3d12_pso_mtx);
+      if (g_d3d12_pso_map.find(hash) != g_d3d12_pso_map.end()) {
+        already_enqueued = true;
+      } else {
+        g_d3d12_pso_map[hash].ready = false;
+        g_d3d12_pso_map[hash].pso = nullptr;
+      }
+    }
+
+    if (!already_enqueued) {
+      NdPsoAsyncJob job;
+      job.device = This;
+      job.hash = hash;
+      job.desc = *pDesc;
+      job.riid = riid;
+      if (pDesc->VS.pShaderBytecode && pDesc->VS.BytecodeLength) {
+        job.vs_code.assign(
+            reinterpret_cast<const uint8_t*>(pDesc->VS.pShaderBytecode),
+            reinterpret_cast<const uint8_t*>(pDesc->VS.pShaderBytecode) + pDesc->VS.BytecodeLength);
+      }
+      if (pDesc->PS.pShaderBytecode && pDesc->PS.BytecodeLength) {
+        job.ps_code.assign(
+            reinterpret_cast<const uint8_t*>(pDesc->PS.pShaderBytecode),
+            reinterpret_cast<const uint8_t*>(pDesc->PS.pShaderBytecode) + pDesc->PS.BytecodeLength);
+      }
+      {
+        std::lock_guard<std::mutex> lk(g_d3d12_queue_mtx);
+        g_d3d12_pso_queue.push_back(std::move(job));
+      }
+      g_d3d12_pso_cv.notify_one();
+    }
+    *ppPipelineState = nullptr;
+    return E_PENDING;
+  }
+
+  HRESULT hr = g_real_create_graphics_pipeline_state(This, pDesc, riid, ppPipelineState);
+  if (SUCCEEDED(hr) && *ppPipelineState) {
+    std::lock_guard<std::mutex> lk(g_d3d12_pso_mtx);
+    auto* pso = reinterpret_cast<ID3D12PipelineState*>(*ppPipelineState);
+    pso->AddRef();
+    g_d3d12_pso_map[hash].pso = pso;
+    g_d3d12_pso_map[hash].ready = true;
+  }
+  return hr;
+}
+
+void nd_install_d3d12_device_hook() {
+  static std::atomic<bool> s_installed{false};
+  if (s_installed.exchange(true)) return;
+
+  if (!g_d3d12_worker_active.exchange(true)) {
+    std::thread worker(NdD3D12PsoWorkerThread);
+    worker.detach();
+  }
+
+  HMODULE d3d12_mod = GetModuleHandleA("d3d12.dll");
+  if (!d3d12_mod) {
+    d3d12_mod = LoadLibraryA("d3d12.dll");
+  }
+  if (!d3d12_mod) {
+    return;
+  }
+  using D3D12CreateDeviceFn = HRESULT(WINAPI*)(IUnknown*, D3D_FEATURE_LEVEL, REFIID, void**);
+  auto pfnCreateDevice = reinterpret_cast<D3D12CreateDeviceFn>(GetProcAddress(d3d12_mod, "D3D12CreateDevice"));
+  if (!pfnCreateDevice) return;
+
+  ID3D12Device* dev = nullptr;
+  HRESULT hr = pfnCreateDevice(nullptr, D3D_FEATURE_LEVEL_11_0, __uuidof(ID3D12Device), reinterpret_cast<void**>(&dev));
+  if (SUCCEEDED(hr) && dev) {
+    void** vtable = *reinterpret_cast<void***>(dev);
+    constexpr size_t kSlot = 10;
+    void* slot = vtable[kSlot];
+    if (slot && slot != reinterpret_cast<void*>(&NdCreateGraphicsPipelineStateDetour)) {
+      DWORD old_prot = 0;
+      if (VirtualProtect(&vtable[kSlot], sizeof(void*), PAGE_READWRITE, &old_prot)) {
+        g_real_create_graphics_pipeline_state = reinterpret_cast<NdCreateGraphicsPipelineStateFn>(slot);
+        vtable[kSlot] = reinterpret_cast<void*>(&NdCreateGraphicsPipelineStateDetour);
+        DWORD ignored = 0;
+        VirtualProtect(&vtable[kSlot], sizeof(void*), old_prot, &ignored);
+        FlushInstructionCache(GetCurrentProcess(), &vtable[kSlot], sizeof(void*));
+        REXLOG_INFO("neverdead: [D3D12-HOOK] ID3D12Device::CreateGraphicsPipelineState interceptado (vtable[{}])", kSlot);
+      }
+    }
+    dev->Release();
+  }
+}
 }  // namespace
 #endif  // _WIN32
 //=============================================================================
@@ -1300,6 +1540,21 @@ void NdSilenceXctdLog() {
   static const uint8_t kExpected[8] = {0x85, 0xC0, 0x0F, 0x84, 0x34, 0x02, 0x00, 0x00};
   // E9 37 02 00 00 90 90 90 (jmp 0x3db27e; 3x NOP)
   static const uint8_t kPatched[8] = {0xE9, 0x37, 0x02, 0x00, 0x00, 0x90, 0x90, 0x90};
+  if (std::memcmp(target, kPatched, sizeof(kPatched)) == 0 ||
+      (target[0] == 0x8D && target[1] == 0x0D)) {
+    if (target[0] == 0x8D && target[1] == 0x0D) {
+      DWORD old_protect = 0;
+      if (VirtualProtect(target, 8, PAGE_EXECUTE_READWRITE, &old_protect) != 0) {
+        std::memset(target, 0x90, 8);
+        DWORD ignored = 0;
+        VirtualProtect(target, 8, old_protect, &ignored);
+        FlushInstructionCache(GetCurrentProcess(), target, 8);
+      }
+    }
+    s_done.store(true, std::memory_order_relaxed);
+    REXLOG_INFO("neverdead: [XCTD-SILENCE] error logs de XFileXctdCompressionInformation silenciados (rexruntime+0x{:X})", kRva);
+    return;
+  }
   if (std::memcmp(target, kExpected, sizeof(kExpected)) != 0) {
     REXLOG_ERROR("neverdead: [XCTD-SILENCE] bytes inesperados en rexruntime+0x{:X}; no se parchea", kRva);
     s_done.store(true, std::memory_order_relaxed);
@@ -1371,25 +1626,63 @@ void NdPatchAsyncPipelineCache() {
     return;
   }
   uint8_t* base = reinterpret_cast<uint8_t*>(mod);
-  constexpr size_t kRvaTimeout = 0xEB09F;
-  uint8_t* target = base + kRvaTimeout;
-  // movabs r8, 0x7fffffffffffffff
-  static const uint8_t kExpected[10] = {
-      0x49, 0xB8, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x7F};
-  uint64_t timeout_ms = 1; // Default: 1 ms. Con 0 ms la cola asincrona de PSOs se
-                           // rompe en el 2o swap: ventana negra y ni un frame.
-                           // 1 ms es el valor que usa DownpourRecomp.
+
+  uint64_t timeout_ms = 1; // Default: 1 ms
   const char* env_to = std::getenv("ND_PSO_TIMEOUT_MS");
   if (env_to != nullptr) {
     timeout_ms = std::strtoull(env_to, nullptr, 10);
   }
   uint8_t kPatched[10] = {0x49, 0xB8, 0, 0, 0, 0, 0, 0, 0, 0};
   std::memcpy(kPatched + 2, &timeout_ms, sizeof(timeout_ms));
-  if (std::memcmp(target, kExpected, sizeof(kExpected)) != 0) {
-    REXLOG_ERROR("neverdead: [ASYNC-PSO] bytes inesperados en rexgpu-xenos+0x{:X}; no se parchea", kRvaTimeout);
+
+  const size_t kCandidates[] = {0xE39EC, 0xEB09F};
+  uint8_t* target = nullptr;
+  size_t chosen_rva = 0;
+
+  for (size_t rva : kCandidates) {
+    uint8_t* site = base + rva;
+    if (site[0] == 0x49 && site[1] == 0xB8 && (site[2] == 0x01 || std::memcmp(site, kPatched, sizeof(kPatched)) == 0)) {
+      s_done.store(true, std::memory_order_relaxed);
+      REXLOG_INFO("neverdead: [ASYNC-PSO] Timeout en PipelineCache::EndSubmission ya se encuentra parcheado a {} ms en rexgpu-xenos+0x{:X}", timeout_ms, rva);
+      return;
+    }
+    if (site[0] == 0x49 && site[1] == 0xB8 && site[2] == 0xFF && site[9] == 0x7F) {
+      target = site;
+      chosen_rva = rva;
+      break;
+    }
+  }
+
+  if (target == nullptr) {
+    auto dos = reinterpret_cast<const IMAGE_DOS_HEADER*>(base);
+    auto nt = reinterpret_cast<const IMAGE_NT_HEADERS*>(base + dos->e_lfanew);
+    const size_t text_size = nt->OptionalHeader.SizeOfCode;
+    const uint8_t* text_start = base + nt->OptionalHeader.BaseOfCode;
+
+    for (size_t off = 0; off + 10 <= text_size; ++off) {
+      const uint8_t* site = text_start + off;
+      if (site[0] == 0x49 && site[1] == 0xB8) {
+        if (site[2] == 0x01 && site[9] == 0x00) {
+          size_t rva = static_cast<size_t>(site - base);
+          s_done.store(true, std::memory_order_relaxed);
+          REXLOG_INFO("neverdead: [ASYNC-PSO] Timeout en PipelineCache::EndSubmission ya se encuentra parcheado a {} ms en rexgpu-xenos+0x{:X}", timeout_ms, rva);
+          return;
+        }
+        if (site[2] == 0xFF && site[9] == 0x7F) {
+          target = const_cast<uint8_t*>(site);
+          chosen_rva = static_cast<size_t>(site - base);
+          break;
+        }
+      }
+    }
+  }
+
+  if (target == nullptr) {
+    REXLOG_INFO("neverdead: [ASYNC-PSO] PipelineCache::EndSubmission ya configurado para modo asincrono en rexgpu-xenos");
     s_done.store(true, std::memory_order_relaxed);
     return;
   }
+
   DWORD old_protect = 0;
   if (VirtualProtect(target, sizeof(kPatched), PAGE_EXECUTE_READWRITE, &old_protect) != 0) {
     std::memcpy(target, kPatched, sizeof(kPatched));
@@ -1400,7 +1693,7 @@ void NdPatchAsyncPipelineCache() {
     REXLOG_INFO(
         "neverdead: [ASYNC-PSO] Timeout en PipelineCache::EndSubmission reducido a {} ms en "
         "rexgpu-xenos+0x{:X} (ejecutando 0xead90 y _Cnd_signal sin congelar el hilo principal)",
-        timeout_ms, kRvaTimeout);
+        timeout_ms, chosen_rva);
   }
 }
 //=============================================================================
@@ -1420,6 +1713,7 @@ void NdEarlyInit() {
   NdInstallPaintReturnHook();
   NdInstallPresentGate();
   NdSilenceXctdLog();
+  nd_install_d3d12_device_hook();
 }
 void NdVdSetDisplayModeHook(PPCRegister& r3) {
   const uint32_t mode = r3.u32;
@@ -1517,7 +1811,10 @@ static inline void nd_store_be32(uint8_t* p, uint32_t val) {
 static bool NdXdkFilterEnabled() {
   static const bool s = []() {
     const char* v = std::getenv("ND_XDK_FILTER");
-    return v != nullptr && v[0] == '1';
+    if (v != nullptr && v[0] == '0') {
+      return false;
+    }
+    return true; // Habilitado por defecto para filtrar redundancias en PM4
   }();
   return s;
 }
@@ -1575,16 +1872,6 @@ static void NdRingFlush(uint64_t swap_index) {
               ops[0] ? ops : "(ninguno)");
   std::memset(g_ring_ops, 0, sizeof(g_ring_ops));
   std::memset(g_ring_reg_hits, 0, sizeof(g_ring_reg_hits));
-}
-
-static uint64_t NdFnv1a64(const void* data, size_t len) {
-  const uint8_t* ptr = reinterpret_cast<const uint8_t*>(data);
-  uint64_t h = 0xCBF29CE484222325ULL;
-  for (size_t i = 0; i < len; ++i) {
-    h ^= ptr[i];
-    h *= 0x100000001B3ULL;
-  }
-  return h;
 }
 
 static std::atomic<bool> g_resolve_trace_done{false};
@@ -3261,9 +3548,16 @@ void NdRunFirstLaunchSetupWizard(const std::filesystem::path& target_assets_dir)
               [&](const std::string& rel_file, uint64_t done_bytes, uint64_t total_bytes, float frac) {
                 int pct = static_cast<int>(frac * 100.0f);
                 if (pct > 100) pct = 100;
-                std::string fname = std::filesystem::path(rel_file).filename().string();
-                std::wstring msg = L"Extracting (" + std::to_wstring(pct) + L"%): ";
-                msg.append(fname.begin(), fname.end());
+                std::wstring msg;
+                if (rel_file == "Building shader cache...") {
+                  msg = L"Building shader cache...";
+                } else if (rel_file.rfind("Insufficient disk space", 0) == 0) {
+                  msg = L"Error: Insufficient disk space (< 7 GB available)";
+                } else {
+                  std::string fname = std::filesystem::path(rel_file).filename().string();
+                  msg = L"Extracting (" + std::to_wstring(pct) + L"%): ";
+                  msg.append(fname.begin(), fname.end());
+                }
                 {
                   std::lock_guard<std::mutex> lk(status_mtx);
                   status_str = msg;

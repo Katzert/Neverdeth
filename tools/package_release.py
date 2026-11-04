@@ -115,10 +115,22 @@ def prepare_staging():
         shutil.copy2(banner, os.path.join(STAGE_DIR, "docs", "assets", "neverdeth_logo_banner.bmp"))
         print(f"  [COPIED] docs/assets/neverdeth_logo_banner.bmp")
 
-    # Crear carpetas vacias assets y cache
+    # Crear carpeta assets vacia y copiar archivos portables de cache
     os.makedirs(os.path.join(STAGE_DIR, "assets"), exist_ok=True)
     os.makedirs(os.path.join(STAGE_DIR, "cache"), exist_ok=True)
-    print("  [CREATED] Empty assets/ and cache/ directories")
+    cache_src = os.path.join(ROOT, "cache")
+    cache_dst = os.path.join(STAGE_DIR, "cache")
+    if os.path.exists(cache_src):
+        for root, dirs, files in os.walk(cache_src):
+            for f in files:
+                ext = os.path.splitext(f.lower())[1]
+                if ext in {".bin", ".xpso", ".xsh"}:
+                    rel_p = os.path.relpath(os.path.join(root, f), cache_src)
+                    dst_p = os.path.join(cache_dst, rel_p)
+                    os.makedirs(os.path.dirname(dst_p), exist_ok=True)
+                    shutil.copy2(os.path.join(root, f), dst_p)
+                    print(f"  [COPIED] cache/{rel_p}")
+    print("  [PREPARED] assets/ and cache/ directories")
 
 def audit_security(stage_dir):
     print("[3/5] Running Security Audit (Zero Proprietary Assets & Anti-Echoing)...")

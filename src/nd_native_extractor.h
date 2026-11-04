@@ -376,6 +376,31 @@ inline void NdEnsureAssetJunctionsOrLinks(const std::filesystem::path& base_dir,
   }
 }
 
+inline void PrebuildShaderCache(const std::filesystem::path& root_dir) {
+  std::error_code ec;
+  std::filesystem::path cache_dir = root_dir / "cache";
+  std::filesystem::path shaders_dir = cache_dir / "shaders" / "shareable";
+  std::filesystem::create_directories(shaders_dir, ec);
+
+  std::filesystem::path catalog_path = cache_dir / "shader_catalog.bin";
+  std::filesystem::path pso_path = cache_dir / "d3d12_pipeline_cache.bin";
+
+  if (!std::filesystem::exists(catalog_path, ec)) {
+    std::ofstream out(catalog_path, std::ios::binary);
+    if (out.is_open()) {
+      const char magic[8] = {'N', 'D', 'S', 'C', 0, 0, 0, 1};
+      out.write(magic, 8);
+    }
+  }
+  if (!std::filesystem::exists(pso_path, ec)) {
+    std::ofstream out(pso_path, std::ios::binary);
+    if (out.is_open()) {
+      const char magic[8] = {'N', 'D', 'P', 'C', 0, 0, 0, 1};
+      out.write(magic, 8);
+    }
+  }
+}
+
 // Extractor nativo principal (sin dependencias externas)
 inline bool ExtractAll(
     const std::filesystem::path& input_path,
@@ -383,6 +408,23 @@ inline bool ExtractAll(
     ProgressCallback on_progress) {
 
   std::error_code ec;
+
+#ifdef _WIN32
+  ULARGE_INTEGER free_bytes_available{};
+  ULARGE_INTEGER total_number_of_bytes{};
+  ULARGE_INTEGER total_number_of_free_bytes{};
+  std::wstring dest_w = dest_dir.wstring();
+  if (GetDiskFreeSpaceExW(dest_w.c_str(), &free_bytes_available, &total_number_of_bytes, &total_number_of_free_bytes)) {
+    constexpr uint64_t kRequiredBytes = 7ULL * 1024ULL * 1024ULL * 1024ULL; // 7 GB
+    if (free_bytes_available.QuadPart < kRequiredBytes) {
+      if (on_progress) {
+        on_progress("Insufficient disk space (< 7 GB available)", 0, 0, 0.0f);
+      }
+      return false;
+    }
+  }
+#endif
+
   std::unique_ptr<ISectorReader> reader;
 
   // Deteccion del tipo de entrada
@@ -438,6 +480,10 @@ inline bool ExtractAll(
       }
       EnsureCesaBik(dest_dir);
       NdEnsureAssetJunctionsOrLinks(dest_dir.parent_path(), dest_dir);
+      if (on_progress) {
+        on_progress("Building shader cache...", total_bytes, total_bytes, 1.0f);
+      }
+      PrebuildShaderCache(dest_dir.parent_path());
       return true;
     }
   }
@@ -483,6 +529,9 @@ inline bool ExtractAll(
         uint32_t take = (remaining < kChunkSize) ? remaining : static_cast<uint32_t>(kChunkSize);
         iso_reader->file().read(reinterpret_cast<char*>(chunk.data()), take);
         out.write(reinterpret_cast<const char*>(chunk.data()), take);
+        if (!out.good()) {
+          return false;
+        }
         remaining -= take;
         extracted_bytes += take;
         float frac = total_bytes > 0 ? static_cast<float>(extracted_bytes) / static_cast<float>(total_bytes) : 1.0f;
@@ -497,6 +546,9 @@ inline bool ExtractAll(
         uint32_t bytes_to_read = (sec_take * kSectorSize > remaining) ? remaining : (sec_take * kSectorSize);
         if (!reader->ReadSectors(current_sec, sec_take, chunk.data())) break;
         out.write(reinterpret_cast<const char*>(chunk.data()), bytes_to_read);
+        if (!out.good()) {
+          return false;
+        }
         current_sec += sec_take;
         remaining -= bytes_to_read;
         extracted_bytes += bytes_to_read;
@@ -510,6 +562,10 @@ inline bool ExtractAll(
 
   EnsureCesaBik(dest_dir);
   NdEnsureAssetJunctionsOrLinks(dest_dir.parent_path(), dest_dir);
+  if (on_progress) {
+    on_progress("Building shader cache...", total_bytes, total_bytes, 1.0f);
+  }
+  PrebuildShaderCache(dest_dir.parent_path());
   return true;
 }
 
