@@ -12,7 +12,7 @@ Initial public alpha release of **Neverdeth**, a full AI-assisted **EmuComp** po
 - **In-Game Graphics Menu (`F10`):** Toggle post-processing effects (SSAO, motion blur, bloom, fog, light shafts, shadows, RMLAA, HUD) in real time.
 - **AI Credits:** Built with Gemini Argon and Gemini 3.8 Flash (via Google AI Pro), alongside Claude Sonnet 4.5 and free-tier models distributed across multiple tools (DeepSeek v4.1 Flash, GLM 5.3, GLM 5.3 Flash, Muse Spark 1.3, Nemotron 3.5 Super VL, MiniMax M3.1 Flash).
 
-**Setup:** Extract `Neverdeth-v0.1.0-alpha-win64.zip`, run `Neverdeth.exe`, and select your Xbox 360 copy of *NeverDead* (`4B4E081F`). Requires the [Visual C++ 2015–2022 Redistributable (x64)](https://aka.ms/vs/17/release/vc_redist.x64.exe).
+**Setup:** Download and extract `Neverdeth-v0.1.0-alpha-win64.zip` below, run `Neverdeth.exe`, and select your Xbox 360 copy of *NeverDead* (`4B4E081F`). Requires the [Visual C++ 2015–2022 Redistributable (x64)](https://aka.ms/vs/17/release/vc_redist.x64.exe).
 
 ---
 
@@ -24,4 +24,4 @@ Initial public alpha release of **Neverdeth**, a full AI-assisted **EmuComp** po
 - **Menú Gráfico en Vivo (`F10`):** Permite alternar efectos de post-procesado (SSAO, motion blur, bloom, niebla, rayos de luz, sombras, RMLAA, HUD) en tiempo real.
 - **Créditos de IA:** Desarrollado con Gemini Argon y Gemini 3.8 Flash (vía Google AI Pro), junto con Claude Sonnet 4.5 y modelos gratuitos repartidos en distintos programas (DeepSeek v4.1 Flash, GLM 5.3, GLM 5.3 Flash, Muse Spark 1.3, Nemotron 3.5 Super VL, MiniMax M3.1 Flash).
 
-**Instalación:** Descomprime `Neverdeth-v0.1.0-alpha-win64.zip`, ejecuta `Neverdeth.exe` y selecciona tu copia de Xbox 360 de *NeverDead* (`4B4E081F`). Requiere [Visual C++ 2015–2022 Redistributable (x64)](https://aka.ms/vs/17/release/vc_redist.x64.exe).
+**Instalación:** Descarga y descomprime `Neverdeth-v0.1.0-alpha-win64.zip` más abajo, ejecuta `Neverdeth.exe` y selecciona tu copia de Xbox 360 de *NeverDead* (`4B4E081F`). Requiere [Visual C++ 2015–2022 Redistributable (x64)](https://aka.ms/vs/17/release/vc_redist.x64.exe).
