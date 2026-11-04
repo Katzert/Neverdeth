@@ -30,12 +30,13 @@ def update_neverdead_app():
         '    FILE* f = fopen("..\\\\NeverDead_base.exe", "rb");'
     )
 
-    assert old_code in content, "old_code not found in neverdead_app.h"
-    content = content.replace(old_code, new_code, 1)
-
-    with open(path, 'w', encoding='utf-8') as f:
-        f.write(content)
-    print("neverdead_app.h updated: VirtualProtect unlocked before fread in MapBaseExeSections!")
+    if old_code in content:
+        content = content.replace(old_code, new_code, 1)
+        with open(path, 'w', encoding='utf-8') as f:
+            f.write(content)
+        print("neverdead_app.h updated: VirtualProtect unlocked before fread in MapBaseExeSections!")
+    else:
+        print("neverdead_app.h already patched (idempotent)")
 
 if __name__ == '__main__':
     update_neverdead_app()

@@ -1,0 +1,16 @@
+# Directivas de optimizacion de registros locales para ReXGlue Codegen
+# Turno v12: Alpha v0.1.0
+# cr, ctr, xer son puramente locales por funcion y se optimizan a variables de registro x64.
+cr_as_local = true
+ctr_as_local = true
+xer_as_local = true
+
+# reserved (r1, r2, r13) y non_volatile (r14..r31) deben vivir en ctx para interoperabilidad
+# con los helpers de pila CRT (__savegprlr/__restgprlr) y trampas de llamada indirecta.
+reserved_as_local = false
+non_volatile_as_local = false
+
+# Directivas que DEBEN mantenerse en false por estabilidad de ABI / indirect calls
+skip_lr = false
+skip_msr = false
+non_argument_as_local = false

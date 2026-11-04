@@ -39,6 +39,8 @@ set(NEVERDEAD_SOURCES
     src/nd_hooks.cpp
     # Traductor guest VA -> host para esos hooks.
     src/nd_guest_mem.cpp
+    # Icono oficial embebido en el ejecutable Win32
+    src/neverdeth.rc
 )
 
 if(WIN32)
@@ -46,6 +48,16 @@ if(WIN32)
 else()
     add_executable(neverdead ${NEVERDEAD_SOURCES})
 endif()
+
+set_target_properties(neverdead PROPERTIES OUTPUT_NAME "Neverdeth")
+
+# Copia de compatibilidad neverdead.exe para harnesses y scripts de test
+add_custom_command(TARGET neverdead POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        $<TARGET_FILE:neverdead>
+        "${CMAKE_CURRENT_BINARY_DIR}/neverdead.exe"
+    COMMENT "Preserving neverdead.exe alias for test harnesses"
+)
 
 if(MSVC OR CMAKE_CXX_COMPILER_ID MATCHES "Clang")
     # DIAG: map file para resolver frames host (sin PDB) a sub_XXXXXXXX.
@@ -59,6 +71,16 @@ if(WIN32)
 endif()
 
 rexglue_setup_target(neverdead GPU_PLUGINS xenos)
+
+find_package(Python3 REQUIRED COMPONENTS Interpreter)
+add_custom_target(neverdead_v13_perf_hooks
+    COMMAND ${Python3_EXECUTABLE} "${CMAKE_CURRENT_SOURCE_DIR}/tools/apply_v13_perf_hooks.py"
+    WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+    COMMENT "Applying v13 performance hooks (NdOnDrawCall, NdShouldSkipLumaResolve) to recomp tree"
+    VERBATIM
+)
+add_dependencies(neverdead_v13_perf_hooks neverdead_codegen)
+add_dependencies(neverdead neverdead_v13_perf_hooks)
 
 # El codegen emite `extern void NdVdInitHook();` en la TU que contiene el hook
 # (verificado en neverdead_recomp.7.cpp:22681). Se mantiene -include como red de

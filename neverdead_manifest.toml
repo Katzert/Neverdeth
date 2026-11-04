@@ -15,4 +15,5 @@ includes = [
     "config/invalid_instructions.toml",
     "config/mid_asm_hooks.toml",
     "config/thunks.toml",
+    "config/codegen.toml",
 ]

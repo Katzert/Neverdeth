@@ -13,6 +13,7 @@
 //   0x826B89A0 -> bl VdSwap              (stub 0x827BFFD4)
 // Verificado con capstone sobre el XEX descifrado (imagen offset == RVA).
 #include "nd_hooks.h"
+#include "nd_native_extractor.h"
 #ifdef _WIN32
 #ifndef NOMINMAX
 #define NOMINMAX
@@ -22,6 +23,8 @@
 #endif
 #include <windows.h>
 #include <tlhelp32.h>
+#include <shlobj.h>
+#include <commdlg.h>
 // La puerta de Present se instala sobre la vtable de IDXGISwapChain, no sobre
 // un call-site adivinado de rexruntime.dll (ver NdInstallPresentGate).
 #include <dxgi.h>
@@ -34,6 +37,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <filesystem>
 #include <mutex>
 #include <utility>
 #include <string>
@@ -43,6 +47,35 @@
 // Declaracion anticipada global: NdPresentHook (dentro del namespace anonimo de
 // mas abajo) aplica el pacer, pero NdApplyFramePacer se define despues.
 static void NdApplyFramePacer();
+
+static std::atomic<bool> g_hospital_reached{false};
+static std::atomic<bool> g_in_3d_gameplay{false};
+static std::atomic<bool> g_unlock_framerate{false};
+static std::atomic<bool>& g_unlock_fps = g_unlock_framerate;
+
+bool NdIsIn3dGameplay() {
+  return g_in_3d_gameplay.load(std::memory_order_relaxed);
+}
+
+bool NdIsFpsUnlocked() {
+  // Durante menus, pantallas de carga y videos Bink, el limite de 30 FPS es obligatorio
+  // para evitar carreras criticas, desbordes en decodificacion y crashes en RtlLeaveCriticalSection.
+  if (!g_in_3d_gameplay.load(std::memory_order_relaxed)) {
+    return false;
+  }
+
+  static const bool s_env_check = []() {
+    const char* throttle = std::getenv("ND_GUEST_THROTTLE");
+    const char* unlock = std::getenv("ND_UNLOCK_FPS");
+    if (unlock != nullptr && unlock[0] == '1') g_unlock_framerate.store(true, std::memory_order_relaxed);
+    if (throttle != nullptr && throttle[0] == '0') g_unlock_framerate.store(true, std::memory_order_relaxed);
+    return true;
+  }();
+  (void)s_env_check;
+
+  return g_unlock_framerate.load(std::memory_order_relaxed);
+}
+
 namespace {
 std::atomic<uint64_t> g_vd_init_calls{0};
 std::atomic<uint64_t> g_vd_swap_calls{0};
@@ -75,6 +108,31 @@ std::atomic<int> g_throttle_timeout_streak{0};
 std::atomic<bool> g_throttle_disabled{false};
 // El invitado ya marca el ritmo (pacing post-swap): el pacer del
 // presentador debe ceder, o dos pacers a 30 Hz baten entre si.
+// Variables de sincronizacion 1:1 Invitado -> Presentador (Turno v12)
+static std::atomic<bool> g_guest_throttle_active{false};
+static std::atomic<uint64_t> g_completed_swap_seq{0};
+static LARGE_INTEGER g_qpf{};
+static LARGE_INTEGER g_last_guest_swap_qpc{};
+
+static void NdEnsureTimerResolution() {
+  static std::once_flag flag;
+  std::call_once(flag, []() {
+    HMODULE winmm = LoadLibraryA("winmm.dll");
+    if (winmm == nullptr) return;
+    using TimeBeginPeriodFn = UINT(WINAPI*)(UINT);
+    auto p_timeBeginPeriod =
+        reinterpret_cast<TimeBeginPeriodFn>(GetProcAddress(winmm, "timeBeginPeriod"));
+    if (p_timeBeginPeriod != nullptr) p_timeBeginPeriod(1);
+  });
+}
+
+static void NdInitQpcOnce() {
+  if (g_qpf.QuadPart == 0) {
+    QueryPerformanceFrequency(&g_qpf);
+    QueryPerformanceCounter(&g_last_guest_swap_qpc);
+    NdEnsureTimerResolution();
+  }
+}
 std::atomic<bool> g_guest_pacing_active{false};
 // Sin mutex en la ruta critica de Present: se hacia lock/unlock en CADA
 // frame. La ventana de estadistica se cierra con un CAS sobre el instante de
@@ -950,6 +1008,7 @@ NdPresentFn nd_find_original_present(void* swap_chain) {
   }
   return nullptr;
 }
+
 extern "C" HRESULT STDMETHODCALLTYPE NdPresentHook(IDXGISwapChain* swap_chain,
                                                     UINT sync_interval, UINT flags) {
   if (swap_chain == nullptr) {
@@ -970,7 +1029,10 @@ extern "C" HRESULT STDMETHODCALLTYPE NdPresentHook(IDXGISwapChain* swap_chain,
   g_present_thread_id.store(GetCurrentThreadId(), std::memory_order_relaxed);
   nd_present_stats_tick(true, now);
   // Pacer del host en el hilo que presenta (no en el hilo del invitado).
-  NdApplyFramePacer();
+  // Solo se aplica si el framerate NO esta desbloqueado y el invitado no esta aplicando pacer.
+  if (!NdIsFpsUnlocked() && !g_guest_throttle_active.load(std::memory_order_acquire)) {
+    NdApplyFramePacer();
+  }
   // Presentacion inmediata sin bloqueo de VBlank fisico (igual que Xenia Canary vsync = false)
   const UINT present_sync = 0;
   const UINT present_flags = flags | DXGI_PRESENT_ALLOW_TEARING;
@@ -1024,9 +1086,8 @@ static std::atomic<bool> g_menu_toggle_request{false};
 static WNDPROC g_original_game_wndproc = nullptr;
 
 LRESULT CALLBACK NdGameSubclassWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
-  if (msg == WM_KEYDOWN && wParam == VK_F1) {
-    // Primer F1: hay que crear la ventana (y su timer) antes de que exista
-    // nada que consuma la peticion. A partir de ahi manda el timer.
+  if ((msg == WM_KEYDOWN || msg == WM_SYSKEYDOWN) && (wParam == VK_F10 || wParam == VK_F1)) {
+    // Interceptar F10 / F1 y evitar menu de sistema en F10
     if (g_config_hwnd == nullptr || !IsWindow(g_config_hwnd)) {
       NdOpenConfigUI();
     } else {
@@ -1343,9 +1404,10 @@ void NdPatchAsyncPipelineCache() {
   }
 }
 //=============================================================================
-static void NdEnsureTimerResolution();  // definido junto al pacer
+// NdEnsureTimerResolution defined above
 
 void NdEarlyInit() {
+  NdLoadSettingsFromIni();
   // Granularidad de 1 ms para el pacer (Sleep del hilo que presenta).
   NdEnsureTimerResolution();
   // ORDEN: primero los parches de paint_mode (para que el primer
@@ -1423,7 +1485,10 @@ static bool NdPacerActive();
 //           bit 0 = paquete predicado por bin (bin_select & bin_mask)
 //=============================================================================
 static bool NdRingEnabled() {
-  static const bool s = (std::getenv("ND_RING") != nullptr);
+  static const bool s = []() {
+    const char* v = std::getenv("ND_RING");
+    return v != nullptr && v[0] == '1';
+  }();
   return s;
 }
 
@@ -1431,6 +1496,67 @@ static inline uint32_t nd_be32(const uint8_t* p) {
   return (uint32_t(p[0]) << 24) | (uint32_t(p[1]) << 16) | (uint32_t(p[2]) << 8) |
          uint32_t(p[3]);
 }
+
+static inline void nd_store_be32(uint8_t* p, uint32_t val) {
+  p[0] = static_cast<uint8_t>(val >> 24);
+  p[1] = static_cast<uint8_t>(val >> 16);
+  p[2] = static_cast<uint8_t>(val >> 8);
+  p[3] = static_cast<uint8_t>(val);
+}
+
+//=============================================================================
+// Estado Sombra XDK D3D (ND_XDK_FILTER=1)
+//=============================================================================
+// Reduce la sobrecarga de microcodigo y constantes en el primary buffer:
+// - Shaders Type-3 0x27 (PM4_IM_LOAD): si el shader es identico al ultimo fijado,
+//   se marca la cabecera como Type-3 PM4_NOP (opcode 0x00).
+// - Constantes Type-3 0x2F (PM4_LOAD_ALU_CONSTANT): si las constantes float4
+//   c0..c255 ya coinciden con el estado sombra, se marcan como PM4_NOP.
+// - Reset automatico en cada frame boundary y en vaciado de ring (sub_826B6B38).
+//=============================================================================
+static bool NdXdkFilterEnabled() {
+  static const bool s = []() {
+    const char* v = std::getenv("ND_XDK_FILTER");
+    return v != nullptr && v[0] == '1';
+  }();
+  return s;
+}
+
+struct NdXdkShadowState {
+  uint32_t current_vs_addr{0};
+  uint32_t current_vs_size{0};
+  uint32_t current_ps_addr{0};
+  uint32_t current_ps_size{0};
+
+  uint32_t alu_consts[256][4]{};
+  bool alu_consts_valid[256]{false};
+
+  uint64_t total_shaders{0};
+  uint64_t filtered_shaders{0};
+  uint64_t total_consts{0};
+  uint64_t filtered_consts{0};
+
+  void Reset() {
+    current_vs_addr = 0;
+    current_vs_size = 0;
+    current_ps_addr = 0;
+    current_ps_size = 0;
+    std::memset(alu_consts_valid, 0, sizeof(alu_consts_valid));
+  }
+};
+
+static NdXdkShadowState g_xdk_shadow{};
+
+extern "C" void NdResetXdkShadowStateOnBoundary() {
+  g_xdk_shadow.Reset();
+}
+
+static LARGE_INTEGER g_guest_frame_start_qpc{};
+static double g_window_cpu_ms_sum = 0.0;
+static double g_window_frame_ms_sum = 0.0;
+static double g_window_min_frame_ms = 999999.0;
+static double g_window_max_frame_ms = 0.0;
+static uint32_t g_window_sample_count = 0;
 
 static uint32_t g_ring_ops[128];      // histograma de opcodes type-3
 static uint32_t g_ring_reg_hits[4];   // [0]=0x2000 [1]=0x2208 [2]=otros
@@ -1451,8 +1577,39 @@ static void NdRingFlush(uint64_t swap_index) {
   std::memset(g_ring_reg_hits, 0, sizeof(g_ring_reg_hits));
 }
 
+static uint64_t NdFnv1a64(const void* data, size_t len) {
+  const uint8_t* ptr = reinterpret_cast<const uint8_t*>(data);
+  uint64_t h = 0xCBF29CE484222325ULL;
+  for (size_t i = 0; i < len; ++i) {
+    h ^= ptr[i];
+    h *= 0x100000001B3ULL;
+  }
+  return h;
+}
+
+static std::atomic<bool> g_resolve_trace_done{false};
+static std::atomic<uint32_t> g_guest_draws_this_frame{0};
+
+extern "C" void NdOnDrawCall() {
+  g_guest_draws_this_frame.fetch_add(1, std::memory_order_relaxed);
+}
+
+static std::atomic<bool> g_opt_luma_resolve{true};
+
+extern "C" bool NdShouldSkipLumaResolve() {
+  if (!g_opt_luma_resolve.load(std::memory_order_relaxed)) {
+    return false;
+  }
+  static std::atomic<uint32_t> g_luma_frame_counter{0};
+  const uint32_t c = g_luma_frame_counter.fetch_add(1, std::memory_order_relaxed);
+  // Decimacion temporal 1:2: saltar ejecucion en frames impares (1 de cada 2 frames)
+  return (c & 1) != 0;
+}
+
 static void NdRingProbe(uint32_t device, uint64_t swap_index) {
-  if (!NdRingEnabled() || device == 0 || g_translate == nullptr) {
+  const bool ring_on = NdRingEnabled();
+  const bool filter_on = NdXdkFilterEnabled();
+  if ((!ring_on && !filter_on) || device == 0 || g_translate == nullptr) {
     return;
   }
   const uint8_t* dev = g_translate(device);
@@ -1475,6 +1632,16 @@ static void NdRingProbe(uint32_t device, uint64_t swap_index) {
   uint32_t i = 0;
   uint32_t draws = 0, resolves = 0, bin_mask = 0, bin_select = 0, predicated = 0;
   uint32_t swaps = 0, reg_writes = 0, surface_info = 0, modecontrol = 0;
+  uint32_t color_info = 0, depth_info = 0, copy_dest_base = 0, copy_dest_info = 0;
+  uint32_t draws_since_last_resolve = 0;
+
+  // Analisis de shaders unicos en este frame
+  std::vector<uint64_t> frame_shader_hashes;
+  frame_shader_hashes.reserve(512);
+  uint32_t im_load_vs = 0, im_load_ps = 0;
+
+  const bool should_trace_resolves = (swap_index > 120 && !g_resolve_trace_done.load(std::memory_order_relaxed));
+
   while (i < dwords) {
     const uint32_t h = nd_be32(p + (i << 2));
     const uint32_t type = h >> 30;
@@ -1489,7 +1656,101 @@ static void NdRingProbe(uint32_t device, uint64_t swap_index) {
         case 0x35:  // PM4_DRAW_INDX_2_BIN
         case 0x36:  // PM4_DRAW_INDX_2
           ++draws;
+          ++draws_since_last_resolve;
           break;
+        case 0x27: {  // PM4_IM_LOAD
+          if (count >= 2) {
+            const uint32_t addr_type = nd_be32(p + ((i + 1) << 2));
+            const uint32_t start_size = nd_be32(p + ((i + 2) << 2));
+            const uint32_t addr = addr_type & ~0x3;
+            const uint32_t shader_type = addr_type & 0x3;
+            const uint32_t size_dwords = start_size & 0xFFFF;
+            if (shader_type == 0) ++im_load_vs; else ++im_load_ps;
+            const uint8_t* code = (addr && g_translate) ? g_translate(addr) : nullptr;
+            if (code != nullptr && size_dwords > 0) {
+              const uint64_t hval = NdFnv1a64(code, size_dwords * 4);
+              frame_shader_hashes.push_back(hval);
+            }
+            if (filter_on && addr != 0) {
+              if (shader_type == 0) {
+                if (g_xdk_shadow.current_vs_addr == addr && g_xdk_shadow.current_vs_size == size_dwords) {
+                  // NOP Type-3 opcode 0x10 (PM4_NOP)
+                  uint8_t* mut_p = const_cast<uint8_t*>(p);
+                  nd_store_be32(mut_p + (i << 2), (h & ~0x00007F00) | (0x10 << 8));
+                  ++g_xdk_shadow.filtered_shaders;
+                } else {
+                  g_xdk_shadow.current_vs_addr = addr;
+                  g_xdk_shadow.current_vs_size = size_dwords;
+                  ++g_xdk_shadow.total_shaders;
+                }
+              } else if (shader_type == 1) {
+                if (g_xdk_shadow.current_ps_addr == addr && g_xdk_shadow.current_ps_size == size_dwords) {
+                  // NOP Type-3 opcode 0x10 (PM4_NOP)
+                  uint8_t* mut_p = const_cast<uint8_t*>(p);
+                  nd_store_be32(mut_p + (i << 2), (h & ~0x00007F00) | (0x10 << 8));
+                  ++g_xdk_shadow.filtered_shaders;
+                } else {
+                  g_xdk_shadow.current_ps_addr = addr;
+                  g_xdk_shadow.current_ps_size = size_dwords;
+                  ++g_xdk_shadow.total_shaders;
+                }
+              }
+            }
+          }
+          break;
+        }
+        case 0x2F: {  // PM4_LOAD_ALU_CONSTANT
+          if (filter_on && count >= 3) {
+            const uint32_t address = nd_be32(p + ((i + 1) << 2)) & 0x3FFFFFFF;
+            const uint32_t offset_type = nd_be32(p + ((i + 2) << 2));
+            const uint32_t size_dwords = nd_be32(p + ((i + 3) << 2)) & 0xFFF;
+            const uint32_t index = offset_type & 0x7FF;
+            const uint32_t alu_type = (offset_type >> 16) & 0xFF;
+            if (alu_type == 0 && (size_dwords % 4) == 0 && size_dwords > 0) {
+              const uint32_t count_vec4 = size_dwords / 4;
+              if (index + count_vec4 <= 256 && g_translate != nullptr) {
+                const uint8_t* src = g_translate(address);
+                if (src != nullptr) {
+                  bool all_same = true;
+                  for (uint32_t v = 0; v < count_vec4; ++v) {
+                    const uint32_t c_idx = index + v;
+                    if (!g_xdk_shadow.alu_consts_valid[c_idx]) {
+                      all_same = false;
+                      break;
+                    }
+                    const uint32_t w0 = nd_be32(src + ((v * 4 + 0) << 2));
+                    const uint32_t w1 = nd_be32(src + ((v * 4 + 1) << 2));
+                    const uint32_t w2 = nd_be32(src + ((v * 4 + 2) << 2));
+                    const uint32_t w3 = nd_be32(src + ((v * 4 + 3) << 2));
+                    if (g_xdk_shadow.alu_consts[c_idx][0] != w0 ||
+                        g_xdk_shadow.alu_consts[c_idx][1] != w1 ||
+                        g_xdk_shadow.alu_consts[c_idx][2] != w2 ||
+                        g_xdk_shadow.alu_consts[c_idx][3] != w3) {
+                      all_same = false;
+                      break;
+                    }
+                  }
+                  if (all_same) {
+                    uint8_t* mut_p = const_cast<uint8_t*>(p);
+                    nd_store_be32(mut_p + (i << 2), (h & ~0x00007F00) | (0x10 << 8));
+                    g_xdk_shadow.filtered_consts += count_vec4;
+                  } else {
+                    for (uint32_t v = 0; v < count_vec4; ++v) {
+                      const uint32_t c_idx = index + v;
+                      g_xdk_shadow.alu_consts[c_idx][0] = nd_be32(src + ((v * 4 + 0) << 2));
+                      g_xdk_shadow.alu_consts[c_idx][1] = nd_be32(src + ((v * 4 + 1) << 2));
+                      g_xdk_shadow.alu_consts[c_idx][2] = nd_be32(src + ((v * 4 + 2) << 2));
+                      g_xdk_shadow.alu_consts[c_idx][3] = nd_be32(src + ((v * 4 + 3) << 2));
+                      g_xdk_shadow.alu_consts_valid[c_idx] = true;
+                    }
+                    g_xdk_shadow.total_consts += count_vec4;
+                  }
+                }
+              }
+            }
+          }
+          break;
+        }
         case 0x50:  // PM4_SET_BIN_MASK  (tiling)
           ++bin_mask;
           break;
@@ -1516,10 +1777,33 @@ static void NdRingProbe(uint32_t device, uint64_t swap_index) {
         if (reg == 0x2000) {  // RB_SURFACE_INFO
           surface_info = val;
           ++g_ring_reg_hits[0];
+        } else if (reg == 0x2001) {  // RB_COLOR_INFO
+          color_info = val;
+        } else if (reg == 0x2002) {  // RB_DEPTH_INFO
+          depth_info = val;
+        } else if (reg == 0x2019) {  // RB_COPY_DEST_BASE
+          copy_dest_base = val;
+        } else if (reg == 0x201B) {  // RB_COPY_DEST_INFO
+          copy_dest_info = val;
         } else if (reg == 0x2208) {  // RB_MODECONTROL
           modecontrol = val;
           ++g_ring_reg_hits[1];
-          if ((val & 7u) == 6u) ++resolves;  // EdramMode::kCopy
+          if ((val & 7u) == 6u) {  // EdramMode::kCopy
+            ++resolves;
+            if (should_trace_resolves) {
+              const uint32_t pitch = surface_info & 0x3FFFu;
+              const uint32_t msaa = (surface_info >> 16) & 3u;
+              const uint32_t edram_base = color_info & 0xFFFu;
+              const uint32_t color_fmt = (color_info >> 16) & 0x0Fu;
+              REXLOG_INFO(
+                  "neverdead: [RESOLVE_TRACE] #{:02d} | draws_prev={} | "
+                  "surface=0x{:08X} (pitch={} msaa={}) | color=0x{:08X} (base={} fmt={}) | "
+                  "depth=0x{:08X} | dest_base=0x{:08X} dest_info=0x{:08X}",
+                  resolves, draws_since_last_resolve, surface_info, pitch, msaa,
+                  color_info, edram_base, color_fmt, depth_info, copy_dest_base, copy_dest_info);
+            }
+            draws_since_last_resolve = 0;
+          }
         } else {
           ++g_ring_reg_hits[2];
         }
@@ -1533,6 +1817,25 @@ static void NdRingProbe(uint32_t device, uint64_t swap_index) {
     }
   }
   s_last = wr;
+  NdResetXdkShadowStateOnBoundary();
+
+  if (draws >= 400 && resolves >= 10) {
+    if (!g_hospital_reached.exchange(true)) {
+      REXLOG_INFO("neverdead: [AUTO-NAV] *** HOSPITAL 3D ALCANZADO (draws={} resolves={}) -> Auto-navegacion desactivada ***",
+                  draws, resolves);
+    }
+  }
+
+  if (should_trace_resolves && resolves >= 10) {
+    g_resolve_trace_done.store(true, std::memory_order_relaxed);
+  }
+
+  // Deduplicacion de hashes de shader en el frame
+  std::sort(frame_shader_hashes.begin(), frame_shader_hashes.end());
+  const size_t unique_shaders =
+      std::unique(frame_shader_hashes.begin(), frame_shader_hashes.end()) -
+      frame_shader_hashes.begin();
+
   if ((swap_index % 60) == 1) {
     REXLOG_INFO(
         "neverdead: [RING] swap #{} | {} dwords | draws={} resolves={} "
@@ -1540,12 +1843,50 @@ static void NdRingProbe(uint32_t device, uint64_t swap_index) {
         "modecontrol=0x{:X} surface=0x{:X}",
         swap_index, dwords, draws, resolves, bin_mask, bin_select, predicated, reg_writes,
         swaps, (surface_info >> 16) & 3u, surface_info & 0x3FFFu, modecontrol, surface_info);
+    if (!frame_shader_hashes.empty()) {
+      REXLOG_INFO(
+          "neverdead: [SHADER_STATS] swap #{} | total IM_LOAD={} (VS={} PS={}) | "
+          "shaders unicos={} (ratio {:.1f}x redundancia)",
+          swap_index, frame_shader_hashes.size(), im_load_vs, im_load_ps,
+          unique_shaders, double(frame_shader_hashes.size()) / std::max(size_t(1), unique_shaders));
+    }
     NdRingFlush(swap_index);
   }
 }
 
 void NdVdSwapHook(PPCRegister& r31) {
   const uint64_t n = g_vd_swap_calls.fetch_add(1, std::memory_order_relaxed) + 1;
+
+  // Deteccion desacoplada y dinamica de Gameplay 3D con filtro de histeresis
+  const uint32_t guest_draws = g_guest_draws_this_frame.exchange(0, std::memory_order_relaxed);
+  static uint32_t s_high_draw_streak = 0;
+  static uint32_t s_low_draw_streak = 0;
+
+  if (guest_draws >= 250) {
+    s_low_draw_streak = 0;
+    if (++s_high_draw_streak >= 3) {
+      if (!g_in_3d_gameplay.load(std::memory_order_relaxed)) {
+        g_in_3d_gameplay.store(true, std::memory_order_relaxed);
+        g_hospital_reached.store(true, std::memory_order_relaxed);
+        REXLOG_INFO("neverdead: [3D-GAMEPLAY] Activado (draws={} streak={}) -> Framerate desbloqueado en vivo",
+                    guest_draws, s_high_draw_streak);
+      }
+    }
+  } else if (guest_draws < 150) {
+    s_high_draw_streak = 0;
+    if (++s_low_draw_streak >= 2) {
+      if (g_in_3d_gameplay.load(std::memory_order_relaxed)) {
+        g_in_3d_gameplay.store(false, std::memory_order_relaxed);
+        REXLOG_INFO("neverdead: [3D-GAMEPLAY] Desactivado (draws={} streak={}) -> Restaurado pacer 30 FPS en Menu/FMV",
+                    guest_draws, s_low_draw_streak);
+      }
+    }
+  } else {
+    // Zona de histeresis [150, 249]: se preserva el estado sin transicionar
+    s_high_draw_streak = 0;
+    s_low_draw_streak = 0;
+  }
+
   // BLINDAJE: el hilo del invitado solo presenta con paint_mode_ == 2. Si algo
   // lo dejo en 0/1, se corrige aqui (antes de EarlyInit) para no arrastrar el
   // fallback a ~0.1 FPS durante todo el frame.
@@ -1581,6 +1922,42 @@ void NdVdSwapHook(PPCRegister& r31) {
     g_sum_ms += ms;
     if (ms > g_max_ms) {
       g_max_ms = ms;
+    }
+    // Telemetria Fase 3: CPU y GPU cada 60 frames
+    LARGE_INTEGER swap_entry_qpc{};
+    QueryPerformanceCounter(&swap_entry_qpc);
+    double frame_cpu_ms = 0.0;
+    if (g_guest_frame_start_qpc.QuadPart > 0 && g_qpf.QuadPart > 0) {
+      frame_cpu_ms = static_cast<double>(swap_entry_qpc.QuadPart - g_guest_frame_start_qpc.QuadPart) * 1000.0 /
+                     static_cast<double>(g_qpf.QuadPart);
+    }
+    g_window_frame_ms_sum += ms;
+    g_window_cpu_ms_sum += frame_cpu_ms;
+    if (ms < g_window_min_frame_ms) g_window_min_frame_ms = ms;
+    if (ms > g_window_max_frame_ms) g_window_max_frame_ms = ms;
+    ++g_window_sample_count;
+
+    if (g_window_sample_count >= 60) {
+      const double avg_ms = g_window_frame_ms_sum / g_window_sample_count;
+      const double min_ms = g_window_min_frame_ms;
+      const double max_ms = g_window_max_frame_ms;
+      const double avg_cpu = g_window_cpu_ms_sum / g_window_sample_count;
+      const double avg_gpu = std::max(0.0, avg_ms - avg_cpu);
+      REXLOG_INFO("neverdead: [FRAME_TIME] avg={:.1f} ms, min={:.1f} ms, max={:.1f} ms, cpu={:.1f} ms, gpu={:.1f} ms",
+                  avg_ms, min_ms, max_ms, avg_cpu, avg_gpu);
+
+      const uint64_t sh_total = g_xdk_shadow.total_shaders + g_xdk_shadow.filtered_shaders;
+      const double pct_sh = sh_total > 0 ? (100.0 * g_xdk_shadow.filtered_shaders / sh_total) : 0.0;
+      const uint64_t c_total = g_xdk_shadow.total_consts + g_xdk_shadow.filtered_consts;
+      const double pct_c = c_total > 0 ? (100.0 * g_xdk_shadow.filtered_consts / c_total) : 0.0;
+      REXLOG_INFO("neverdead: [XDK_SHADOW] shaders_filtrados={} ({:.1f}%), constantes_filtradas={} ({:.1f}%)",
+                  g_xdk_shadow.filtered_shaders, pct_sh, g_xdk_shadow.filtered_consts, pct_c);
+
+      g_window_frame_ms_sum = 0.0;
+      g_window_cpu_ms_sum = 0.0;
+      g_window_min_frame_ms = 999999.0;
+      g_window_max_frame_ms = 0.0;
+      g_window_sample_count = 0;
     }
     if (ms > 100.0) {
       ++g_spike_100;
@@ -1696,19 +2073,7 @@ static HANDLE g_pacer_timer = nullptr;
 static LARGE_INTEGER g_qpc_freq{};
 static int64_t g_last_pacer_qpc = 0;
 
-// timeBeginPeriod(1): sin esto Sleep() tiene granularidad de 15.6 ms y el
-// pacer de 33.3 ms se convierte en 46 ms. Idempotente (call_once).
-static void NdEnsureTimerResolution() {
-  static std::once_flag flag;
-  std::call_once(flag, []() {
-    HMODULE winmm = LoadLibraryA("winmm.dll");
-    if (winmm == nullptr) return;
-    using TimeBeginPeriodFn = UINT(WINAPI*)(UINT);
-    auto p_timeBeginPeriod =
-        reinterpret_cast<TimeBeginPeriodFn>(GetProcAddress(winmm, "timeBeginPeriod"));
-    if (p_timeBeginPeriod != nullptr) p_timeBeginPeriod(1);
-  });
-}
+// NdEnsureTimerResolution moved above
 
 static void NdInitPacer() {
   static std::once_flag flag;
@@ -1726,6 +2091,9 @@ static void NdInitPacer() {
 }
 
 static void NdApplyFramePacer() {
+  if (g_guest_throttle_active.load(std::memory_order_acquire)) {
+    return;
+  }
   float target_fps = g_fps_target.load(std::memory_order_relaxed);
   if (target_fps <= 0.0f) {
     // Ilimitado: coste cero. Ni QueryPerformanceCounter ni temporizador.
@@ -1788,71 +2156,71 @@ static bool NdPacerActive() {
 // Es pacing por tiempo, no por contadores: no depende de que el presentador
 // avance, asi que no puede interbloquearse. 0x82B31FBC sigue siempre a 0.0f.
 //=============================================================================
-static void NdPaceGuestFrame(uint64_t swap_index) {
-  // OPT-IN: por defecto NO se frena al invitado. Medido en este equipo, el
-  // presentador del host esta acoplado al swap del invitado y cualquier pacing
-  // del invitado baja la tasa de presents (30.0 -> 22.0) aunque el bucle del
-  // invitado quede clavado en 30.0. Para reproducir el experimento:
-  //     set ND_GUEST_THROTTLE=1
-  static const bool s_env_on = []() {
-    const char* v = std::getenv("ND_GUEST_THROTTLE");
-    return v != nullptr && v[0] == '1';
+// Llamar desde NdVdSwapPostHook (cuando VdSwap, VdPersistDisplay y stw r11,48(r31) ya terminaron)
+static void NdWakeAddress(void* addr) {
+  static auto s_fn = []() -> void (WINAPI*)(void*) {
+    HMODULE h = GetModuleHandleA("api-ms-win-core-synch-l1-2-0.dll");
+    if (!h) h = GetModuleHandleA("kernel32.dll");
+    if (!h) h = LoadLibraryA("api-ms-win-core-synch-l1-2-0.dll");
+    if (!h) return nullptr;
+    return reinterpret_cast<void (WINAPI*)(void*)>(GetProcAddress(h, "WakeByAddressSingle"));
   }();
-  if (!s_env_on || swap_index <= 60 || !NdPacerActive()) {
+  if (s_fn) {
+    s_fn(addr);
+  }
+}
+
+static void NdPaceGuestAfterSwapComplete(float target_fps, uint64_t swap_count) {
+  NdInitQpcOnce();
+
+  // Despertar/notificar al presentador que el frame del invitado ya esta cerrado
+  g_completed_swap_seq.fetch_add(1, std::memory_order_release);
+  NdWakeAddress(reinterpret_cast<void*>(&g_completed_swap_seq));
+
+  // No frenar si los FPS estan desbloqueados, durante los primeros 120 swaps o si target_fps <= 0
+  if (NdIsFpsUnlocked() || swap_count <= 120 || target_fps <= 0.0f) {
+    g_guest_throttle_active.store(false, std::memory_order_release);
+    QueryPerformanceCounter(&g_last_guest_swap_qpc);
     return;
   }
-  float fps = g_fps_target.load(std::memory_order_relaxed);
-  if (fps <= 0.0f || g_qpc_freq.QuadPart <= 0) {
-    return;
-  }
-  // Headroom: si el invitado va EXACTAMENTE al mismo ritmo que el pacer del
-  // presentador, los dos relojes derivan y el presentador se salta ~1 de cada
-  // 4 despertares (medido: guest 30.0 / present 22.0). Yendo un 5% por delante
-  // siempre hay un frame nuevo esperando y el presentador clava los 30.0.
-  static const float s_headroom = []() {
-    const char* v = std::getenv("ND_GUEST_HEADROOM_PCT");
-    const float pct = (v != nullptr) ? static_cast<float>(std::atof(v)) : 5.0f;
-    return 1.0f + (pct > 0.0f ? pct : 0.0f) / 100.0f;
-  }();
-  fps *= s_headroom;
-  const int64_t target_ticks =
-      static_cast<int64_t>(static_cast<double>(g_qpc_freq.QuadPart) / fps);
-  static int64_t s_next = 0;
-  LARGE_INTEGER now;
+
+  g_guest_throttle_active.store(true, std::memory_order_release);
+
+  const double target_sec = 1.0 / static_cast<double>(target_fps);
+  LARGE_INTEGER now{};
   QueryPerformanceCounter(&now);
-  // Primera vez, o venimos de un paron largo: reanclar sin deuda.
-  if (s_next == 0 || now.QuadPart - s_next > target_ticks) {
-    s_next = now.QuadPart;
-  }
-  const int64_t remaining = s_next - now.QuadPart;
-  if (remaining > 0) {
-    const double remaining_ms =
-        (static_cast<double>(remaining) * 1000.0) / static_cast<double>(g_qpc_freq.QuadPart);
-    if (remaining_ms > 2.0) {
-      const DWORD sleep_ms = static_cast<DWORD>(remaining_ms - 1.5);
-      if (sleep_ms > 0) {
-        Sleep(sleep_ms);
-      }
+  double elapsed_sec = static_cast<double>(now.QuadPart - g_last_guest_swap_qpc.QuadPart) /
+                       static_cast<double>(g_qpf.QuadPart);
+
+  if (elapsed_sec < target_sec) {
+    const double remaining_ms = (target_sec - elapsed_sec) * 1000.0;
+    if (remaining_ms > 1.8) {
+      Sleep(static_cast<DWORD>(remaining_ms - 1.5));
     }
-    LARGE_INTEGER spin;
     do {
       YieldProcessor();
-      QueryPerformanceCounter(&spin);
-    } while (spin.QuadPart < s_next);
+      QueryPerformanceCounter(&now);
+      elapsed_sec = static_cast<double>(now.QuadPart - g_last_guest_swap_qpc.QuadPart) /
+                    static_cast<double>(g_qpf.QuadPart);
+    } while (elapsed_sec < target_sec);
   }
-  s_next += target_ticks;
-  QueryPerformanceCounter(&now);
-  if (now.QuadPart - s_next > target_ticks) {
-    s_next = now.QuadPart;
-  }
-  // A partir de aqui el ritmo lo marca el invitado: el pacer del presentador
-  // se retira para no batir contra este.
-  g_guest_pacing_active.store(true, std::memory_order_relaxed);
+  g_last_guest_swap_qpc = now;
+  QueryPerformanceCounter(&g_guest_frame_start_qpc);
 }
 
 void NdVdSwapPostHook(PPCRegister& r31) {
   (void)r31;
-  NdPaceGuestFrame(g_vd_swap_calls.load(std::memory_order_relaxed));
+  const uint64_t swap_count = g_vd_swap_calls.load(std::memory_order_relaxed);
+
+  // Si los FPS estan desbloqueados en gameplay (NdIsFpsUnlocked() == true tras alcanzar el hospital),
+  // target_fps es 0.0f para liberar el techo.
+  // Durante menus y carga (!g_hospital_reached), SIEMPRE se mantiene 30 FPS para evitar
+  // desincronizacion y colapso del ring buffer.
+  float target_fps = g_fps_target.load(std::memory_order_relaxed);
+  if (NdIsFpsUnlocked()) {
+    target_fps = 0.0f;
+  }
+  NdPaceGuestAfterSwapComplete(target_fps, swap_count);
 }
 
 static void NdDumpAsuraCVarsOnce() {
@@ -1946,6 +2314,8 @@ enum {
   IDC_CFG_CHK_PFX,
   IDC_CFG_CHK_RMLAA,
   IDC_CFG_CHK_HUD,
+  IDC_CFG_CHK_LUMA_OPT = 1025,
+  IDC_CFG_CHK_UNLOCK_FPS = 1026,
   IDC_CFG_BTN_CLOSE = 1030,
   IDC_CFG_BTN_EXIT_DESKTOP,
   IDC_CFG_PRESET_LOW,
@@ -1955,6 +2325,7 @@ enum {
 
 struct NdRenderToggle {
   const wchar_t* label;
+  const wchar_t* ini_key;
   int id;
   uint32_t va;   // byte principal en .data del invitado
   uint32_t va2;  // flag companero (Sombras -> CSM), 0 si no aplica
@@ -1962,16 +2333,16 @@ struct NdRenderToggle {
 
 // Orden = layout: 0..4 columna izquierda, 5..9 columna derecha.
 static const NdRenderToggle kToggles[] = {
-    {L"Sombras Dinámicas", IDC_CFG_CHK_SHADOW, 0x828E1FB7, 0x828E1FC5},
-    {L"Oclusión Ambiental (SSAO)", IDC_CFG_CHK_SSAO, 0x828E1FC7, 0},
-    {L"Motion Blur", IDC_CFG_CHK_MBLUR, 0x82801CEF, 0},
-    {L"Bloom HDR", IDC_CFG_CHK_BLOOM, 0x828E1FC6, 0},
-    {L"God Rays (Light Shafts)", IDC_CFG_CHK_LIGHTSHAFTS, 0x828E1FBF, 0},
-    {L"Niebla Volumétrica", IDC_CFG_CHK_FOG, 0x828E1FC0, 0},
-    {L"Post-Procesado (FSFX)", IDC_CFG_CHK_FSFX, 0x828E1FC1, 0},
-    {L"Partículas (PFX)", IDC_CFG_CHK_PFX, 0x828E1FBD, 0},
-    {L"Antialiasing (RMLAA)", IDC_CFG_CHK_RMLAA, 0x828E1FC9, 0},
-    {L"Mostrar HUD", IDC_CFG_CHK_HUD, 0x828E1FC3, 0},
+    {L"Sombras Dinámicas", L"DynamicShadows", IDC_CFG_CHK_SHADOW, 0x828E1FB7, 0x828E1FC5},
+    {L"Oclusión Ambiental (SSAO)", L"AmbientOcclusionSSAO", IDC_CFG_CHK_SSAO, 0x828E1FC7, 0},
+    {L"Motion Blur", L"MotionBlur", IDC_CFG_CHK_MBLUR, 0x82801CEF, 0},
+    {L"Bloom HDR", L"BloomHDR", IDC_CFG_CHK_BLOOM, 0x828E1FC6, 0},
+    {L"God Rays (Light Shafts)", L"LightShafts", IDC_CFG_CHK_LIGHTSHAFTS, 0x828E1FBF, 0},
+    {L"Niebla Volumétrica", L"VolumetricFog", IDC_CFG_CHK_FOG, 0x828E1FC0, 0},
+    {L"Post-Procesado (FSFX)", L"PostProcessingFSFX", IDC_CFG_CHK_FSFX, 0x828E1FC1, 0},
+    {L"Partículas (PFX)", L"ParticlesPFX", IDC_CFG_CHK_PFX, 0x828E1FBD, 0},
+    {L"Antialiasing (RMLAA)", L"AntialiasingRMLAA", IDC_CFG_CHK_RMLAA, 0x828E1FC9, 0},
+    {L"Mostrar HUD", L"ShowHUD", IDC_CFG_CHK_HUD, 0x828E1FC3, 0},
 };
 
 // 16 flags que tocan los presets (9 efectos + CSM + 6 de overdraw). El HUD va aparte.
@@ -2050,12 +2421,90 @@ static bool NdToggleValue(const NdRenderToggle& t) {
   return on && read_guest_u8(t.va2) != 0;
 }
 
+static int s_window_mode = 0;
+
+static std::wstring NdGetSettingsIniPath() {
+  wchar_t exe_path[MAX_PATH] = {};
+  GetModuleFileNameW(nullptr, exe_path, MAX_PATH);
+  std::filesystem::path exe_dir = std::filesystem::path(exe_path).parent_path();
+  std::filesystem::path ini = exe_dir / "config" / "settings.ini";
+  if (std::filesystem::exists(ini)) {
+    return ini.wstring();
+  }
+  std::filesystem::path parent_ini = exe_dir.parent_path() / "config" / "settings.ini";
+  if (std::filesystem::exists(parent_ini)) {
+    return parent_ini.wstring();
+  }
+  std::error_code ec;
+  std::filesystem::create_directories(exe_dir / "config", ec);
+  return ini.wstring();
+}
+
+void NdLoadSettingsFromIni() {
+  std::wstring ini = NdGetSettingsIniPath();
+  if (!std::filesystem::exists(ini)) return;
+
+  wchar_t buf[64] = {};
+
+  GetPrivateProfileStringW(L"Graphics", L"UnlockFramerate", L"false", buf, 64, ini.c_str());
+  bool unlock = (_wcsicmp(buf, L"true") == 0 || wcstol(buf, nullptr, 10) == 1);
+  g_unlock_fps.store(unlock, std::memory_order_relaxed);
+
+  GetPrivateProfileStringW(L"Graphics", L"AdaptiveExposureOptimization", L"true", buf, 64, ini.c_str());
+  bool luma_opt = (_wcsicmp(buf, L"false") != 0 && _wcsicmp(buf, L"0") != 0);
+  g_opt_luma_resolve.store(luma_opt, std::memory_order_relaxed);
+
+  int fps = GetPrivateProfileIntW(L"Graphics", L"TargetFPS", 30, ini.c_str());
+  if (unlock) {
+    g_fps_target.store(0.0f, std::memory_order_relaxed);
+  } else {
+    g_fps_target.store(static_cast<float>(fps), std::memory_order_relaxed);
+  }
+
+  s_window_mode = GetPrivateProfileIntW(L"Graphics", L"WindowMode", 0, ini.c_str());
+
+  for (const auto& t : kToggles) {
+    GetPrivateProfileStringW(L"Graphics", t.ini_key, L"true", buf, 64, ini.c_str());
+    bool val = (_wcsicmp(buf, L"false") != 0 && _wcsicmp(buf, L"0") != 0);
+    write_guest_u8(t.va, val ? 1 : 0);
+    if (t.va2 != 0) write_guest_u8(t.va2, val ? 1 : 0);
+  }
+}
+
+void NdSaveSettingsToIni() {
+  std::wstring ini = NdGetSettingsIniPath();
+  bool unlock = g_unlock_fps.load(std::memory_order_relaxed);
+  WritePrivateProfileStringW(L"Graphics", L"UnlockFramerate", unlock ? L"true" : L"false", ini.c_str());
+
+  bool luma_opt = g_opt_luma_resolve.load(std::memory_order_relaxed);
+  WritePrivateProfileStringW(L"Graphics", L"AdaptiveExposureOptimization", luma_opt ? L"true" : L"false", ini.c_str());
+
+  float target = g_fps_target.load(std::memory_order_relaxed);
+  int fps_val = (target <= 0.0f) ? 0 : static_cast<int>(target);
+  WritePrivateProfileStringW(L"Graphics", L"TargetFPS", std::to_wstring(fps_val).c_str(), ini.c_str());
+
+  WritePrivateProfileStringW(L"Graphics", L"WindowMode", std::to_wstring(s_window_mode).c_str(), ini.c_str());
+
+  for (const auto& t : kToggles) {
+    bool val = NdToggleValue(t);
+    WritePrivateProfileStringW(L"Graphics", t.ini_key, val ? L"true" : L"false", ini.c_str());
+  }
+}
+
 static void NdSyncCheckboxesFromMemory(HWND hwnd) {
   for (const auto& t : kToggles) {
     HWND chk = GetDlgItem(hwnd, t.id);
     if (chk != nullptr) {
       SendMessageW(chk, BM_SETCHECK, NdToggleValue(t) ? BST_CHECKED : BST_UNCHECKED, 0);
     }
+  }
+  HWND chkLuma = GetDlgItem(hwnd, IDC_CFG_CHK_LUMA_OPT);
+  if (chkLuma != nullptr) {
+    SendMessageW(chkLuma, BM_SETCHECK, g_opt_luma_resolve.load() ? BST_CHECKED : BST_UNCHECKED, 0);
+  }
+  HWND chkUnlock = GetDlgItem(hwnd, IDC_CFG_CHK_UNLOCK_FPS);
+  if (chkUnlock != nullptr) {
+    SendMessageW(chkUnlock, BM_SETCHECK, g_unlock_fps.load() ? BST_CHECKED : BST_UNCHECKED, 0);
   }
 }
 
@@ -2067,6 +2516,7 @@ static void NdApplyPreset(HWND hwnd, bool high_quality) {
   }
   write_guest_u8(kHudVa, 1);  // HUD siempre encendido en ambos perfiles
   NdSyncCheckboxesFromMemory(hwnd);
+  NdSaveSettingsToIni();
   if (NdIsDiagEnabled()) {
     REXLOG_INFO("neverdead: [CONFIG-UI] Perfil '{}': {} flags = {} (HUD ON)",
                 high_quality ? "Calidad Original" : "Bajo Consumo", written, val);
@@ -2074,6 +2524,7 @@ static void NdApplyPreset(HWND hwnd, bool high_quality) {
 }
 
 static void NdApplyWindowMode(int idx) {
+  s_window_mode = idx;
   HWND ghwnd = NdGetGameWindow();
   if (ghwnd == nullptr) return;
   if (idx == 0) {  // 720p
@@ -2101,6 +2552,7 @@ static void NdApplyWindowMode(int idx) {
     SetWindowPos(ghwnd, HWND_TOP, 0, 0, GetSystemMetrics(SM_CXSCREEN),
                  GetSystemMetrics(SM_CYSCREEN), SWP_FRAMECHANGED | SWP_SHOWWINDOW);
   }
+  NdSaveSettingsToIni();
 }
 
 static void NdHideConfigAndFocusGame(HWND hwnd) {
@@ -2115,9 +2567,23 @@ static void NdDrawBanner(HDC hdc) {
   static bool s_loaded = false;
   if (!s_loaded) {
     s_loaded = true;
+    // 1. Intentar cargar desde el recurso incrustado en el binario (ID 2)
     s_banner = reinterpret_cast<HBITMAP>(LoadImageW(
-        nullptr, L"docs/assets/neverdeth_logo_banner.bmp", IMAGE_BITMAP, 0, 0,
-        LR_LOADFROMFILE | LR_CREATEDIBSECTION));
+        GetModuleHandleW(nullptr), MAKEINTRESOURCEW(2), IMAGE_BITMAP, 0, 0,
+        LR_CREATEDIBSECTION));
+    // 2. Fallback: cargar relativo al ejecutable via GetModuleFileNameW
+    if (s_banner == nullptr) {
+      wchar_t exe_buf[MAX_PATH] = {};
+      GetModuleFileNameW(nullptr, exe_buf, MAX_PATH);
+      std::filesystem::path exe_dir = std::filesystem::path(exe_buf).parent_path();
+      std::filesystem::path bmp = exe_dir / "docs" / "assets" / "neverdeth_logo_banner.bmp";
+      if (!std::filesystem::exists(bmp)) {
+        bmp = exe_dir.parent_path() / "docs" / "assets" / "neverdeth_logo_banner.bmp";
+      }
+      s_banner = reinterpret_cast<HBITMAP>(LoadImageW(
+          nullptr, bmp.wstring().c_str(), IMAGE_BITMAP, 0, 0,
+          LR_LOADFROMFILE | LR_CREATEDIBSECTION));
+    }
   }
   if (s_banner == nullptr) return;
   HDC mem = CreateCompatibleDC(hdc);
@@ -2150,7 +2616,7 @@ static void NdCreateConfigControls(HWND hwnd) {
   SendMessageW(cbWnd, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"Ventana 720p"));
   SendMessageW(cbWnd, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"Ventana 1080p"));
   SendMessageW(cbWnd, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"Sin Bordes (Fullscreen)"));
-  SendMessageW(cbWnd, CB_SETCURSEL, 0, 0);
+  SendMessageW(cbWnd, CB_SETCURSEL, s_window_mode, 0);
   NdApplyDarkComboTheme(cbWnd);
 
   HWND lblFps = CreateWindowW(L"STATIC", L"FPS:", WS_CHILD | WS_VISIBLE, 275, 65, 35, 20, hwnd,
@@ -2161,10 +2627,11 @@ static void NdCreateConfigControls(HWND hwnd) {
                                180, 200, hwnd, reinterpret_cast<HMENU>(IDC_CFG_COMBO_FPS),
                                nullptr, nullptr);
   set_font(cbFps, hFont);
-  SendMessageW(cbFps, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"Ilimitado"));
+  SendMessageW(cbFps, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"Ilimitado (Desbloqueado)"));
   SendMessageW(cbFps, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"60 FPS"));
   SendMessageW(cbFps, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"30 FPS"));
-  SendMessageW(cbFps, CB_SETCURSEL, 2, 0);  // ALPHA: 30 FPS por defecto
+  int fps_sel = (g_fps_target.load() <= 0.0f) ? 0 : (g_fps_target.load() > 45.0f ? 1 : 2);
+  SendMessageW(cbFps, CB_SETCURSEL, fps_sel, 0);
   NdApplyDarkComboTheme(cbFps);
 
   // --- Fila 2: perfiles de un clic ---
@@ -2183,23 +2650,38 @@ static void NdCreateConfigControls(HWND hwnd) {
   for (int i = 0; i < 10; ++i) {
     const auto& t = kToggles[i];
     const int x = (i < 5) ? 25 : 275;
-    const int y = 143 + (i % 5) * 26;
+    const int y = 138 + (i % 5) * 25;
     HWND chk = CreateWindowW(L"BUTTON", t.label, WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX, x, y,
                              220, 22, hwnd, reinterpret_cast<HMENU>(static_cast<INT_PTR>(t.id)),
                              nullptr, nullptr);
     set_font(chk, hFont);
-    NdDisableTheme(chk);  // sin tema visual: respeta WM_CTLCOLORSTATIC
+    NdDisableTheme(chk);
     SendMessageW(chk, BM_SETCHECK, NdToggleValue(t) ? BST_CHECKED : BST_UNCHECKED, 0);
   }
 
+  // --- Fila extra: Opt. Exposicion Adaptativa + Desbloquear FPS ---
+  HWND chkLuma = CreateWindowW(L"BUTTON", L"Opt. Exposición Adaptativa", WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX,
+                               25, 268, 220, 22, hwnd, reinterpret_cast<HMENU>(IDC_CFG_CHK_LUMA_OPT),
+                               nullptr, nullptr);
+  set_font(chkLuma, hFont);
+  NdDisableTheme(chkLuma);
+  SendMessageW(chkLuma, BM_SETCHECK, g_opt_luma_resolve.load() ? BST_CHECKED : BST_UNCHECKED, 0);
+
+  HWND chkUnlock = CreateWindowW(L"BUTTON", L"Desbloquear FPS en Gameplay", WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX,
+                                 275, 268, 220, 22, hwnd, reinterpret_cast<HMENU>(IDC_CFG_CHK_UNLOCK_FPS),
+                                 nullptr, nullptr);
+  set_font(chkUnlock, hFont);
+  NdDisableTheme(chkUnlock);
+  SendMessageW(chkUnlock, BM_SETCHECK, g_unlock_fps.load() ? BST_CHECKED : BST_UNCHECKED, 0);
+
   // --- Fila inferior ---
-  HWND btnClose = CreateWindowW(L"BUTTON", L"Volver al Juego (F1 / ESC)",
-                                WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON | BS_OWNERDRAW, 20, 287, 230, 32, hwnd,
+  HWND btnClose = CreateWindowW(L"BUTTON", L"Volver al Juego (F10 / ESC)",
+                                WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON | BS_OWNERDRAW, 20, 302, 230, 32, hwnd,
                                 reinterpret_cast<HMENU>(IDC_CFG_BTN_CLOSE), nullptr, nullptr);
   set_font(btnClose, hFontBold);
   NdDisableTheme(btnClose);
   HWND btnExit = CreateWindowW(L"BUTTON", L"Salir al Escritorio",
-                               WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON | BS_OWNERDRAW, 275, 287, 220, 32, hwnd,
+                               WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON | BS_OWNERDRAW, 275, 302, 220, 32, hwnd,
                                reinterpret_cast<HMENU>(IDC_CFG_BTN_EXIT_DESKTOP), nullptr,
                                nullptr);
   set_font(btnExit, hFontBold);
@@ -2235,10 +2717,7 @@ static LRESULT CALLBACK NdConfigWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPAR
     }
     case WM_KEYDOWN:
     case WM_SYSKEYDOWN: {
-      // Via directa: el mensaje llega a la ventana con foco. El timer cubre el
-      // caso contrario (foco en el juego). El flag "handled" evita el doble
-      // toggle cuando ambas vias ven la misma pulsacion.
-      if (wParam == VK_F1) {
+      if (wParam == VK_F10 || wParam == VK_F1) {
         if (!s_f1_wm_handled) {
           s_f1_wm_handled = true;
           if (IsWindowVisible(hwnd)) {
@@ -2262,22 +2741,22 @@ static LRESULT CALLBACK NdConfigWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPAR
     }
     case WM_KEYUP:
     case WM_SYSKEYUP: {
-      if (wParam == VK_F1) s_f1_wm_handled = false;
+      if (wParam == VK_F10 || wParam == VK_F1) s_f1_wm_handled = false;
       if (wParam == VK_ESCAPE) s_esc_wm_handled = false;
       break;
     }
     case WM_TIMER: {
       if (wParam != IDC_CFG_TIMER_ID) break;
-      // Toggle global por sondeo: cubre el caso "el foco esta en el juego".
-      // La peticion del subclass del juego se funde con la deteccion de flanco.
+      const bool f10_down = (GetAsyncKeyState(VK_F10) & 0x8000) != 0;
       const bool f1_down = (GetAsyncKeyState(VK_F1) & 0x8000) != 0;
       const bool esc_down = (GetAsyncKeyState(VK_ESCAPE) & 0x8000) != 0;
-      const bool f1_edge = f1_down && !s_f1_prev && !s_f1_wm_handled;
+      const bool toggle_down = f10_down || f1_down;
+      const bool toggle_edge = toggle_down && !s_f1_prev && !s_f1_wm_handled;
       const bool esc_edge = esc_down && !s_esc_prev && !s_esc_wm_handled;
       const bool requested = g_menu_toggle_request.exchange(false);
-      s_f1_prev = f1_down;
+      s_f1_prev = toggle_down;
       s_esc_prev = esc_down;
-      if (f1_edge || requested) {
+      if (toggle_edge || requested) {
         if (IsWindowVisible(hwnd)) {
           NdHideConfigAndFocusGame(hwnd);
         } else {
@@ -2297,7 +2776,6 @@ static LRESULT CALLBACK NdConfigWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPAR
       const DRAWITEMSTRUCT* dis = reinterpret_cast<const DRAWITEMSTRUCT*>(lParam);
       if (dis == nullptr || dis->CtlType != ODT_BUTTON) break;
       const bool pressed = (dis->itemState & ODS_SELECTED) != 0;
-      // Fondo carbon (mas claro al pulsar) + borde bronce; "Salir" en rojo.
       HBRUSH face = CreateSolidBrush(pressed ? RGB(48, 40, 32) : RGB(32, 29, 27));
       FillRect(dis->hDC, &dis->rcItem, face);
       DeleteObject(face);
@@ -2330,7 +2808,7 @@ static LRESULT CALLBACK NdConfigWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPAR
       }
       if (id == IDC_CFG_BTN_EXIT_DESKTOP) {
         if (NdIsDiagEnabled()) {
-          REXLOG_INFO("neverdead: [CLEAN-EXIT] Salir al Escritorio desde el menu F1");
+          REXLOG_INFO("neverdead: [CLEAN-EXIT] Salir al Escritorio desde el menu");
         }
         TerminateProcess(GetCurrentProcess(), 0);
         return 0;
@@ -2343,14 +2821,35 @@ static LRESULT CALLBACK NdConfigWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPAR
         NdApplyPreset(hwnd, true);
         return 0;
       }
+      if (id == IDC_CFG_CHK_LUMA_OPT && code == BN_CLICKED) {
+        const bool on = SendMessageW(reinterpret_cast<HWND>(lParam), BM_GETCHECK, 0, 0) == BST_CHECKED;
+        g_opt_luma_resolve.store(on, std::memory_order_relaxed);
+        NdSaveSettingsToIni();
+        return 0;
+      }
+      if (id == IDC_CFG_CHK_UNLOCK_FPS && code == BN_CLICKED) {
+        const bool on = SendMessageW(reinterpret_cast<HWND>(lParam), BM_GETCHECK, 0, 0) == BST_CHECKED;
+        g_unlock_fps.store(on, std::memory_order_relaxed);
+        if (on) {
+          g_fps_target.store(0.0f, std::memory_order_relaxed);
+        } else {
+          g_fps_target.store(30.0f, std::memory_order_relaxed);
+        }
+        HWND cb = GetDlgItem(hwnd, IDC_CFG_COMBO_FPS);
+        if (cb) SendMessageW(cb, CB_SETCURSEL, on ? 0 : 2, 0);
+        NdSaveSettingsToIni();
+        return 0;
+      }
       if (id == IDC_CFG_COMBO_FPS && code == CBN_SELCHANGE) {
         HWND cb = reinterpret_cast<HWND>(lParam);
         const int idx = static_cast<int>(SendMessageW(cb, CB_GETCURSEL, 0, 0));
         const float target = (idx == 1) ? 60.0f : (idx == 2) ? 30.0f : 0.0f;
         g_fps_target.store(target, std::memory_order_relaxed);
-        // NUNCA escribir el limite en 0x82B31FBC: con un valor distinto de 0 el
-        // motor Asura se queda esperando vblanks tras el primer VdSwap.
+        g_unlock_fps.store(idx == 0, std::memory_order_relaxed);
+        HWND chkUnlock = GetDlgItem(hwnd, IDC_CFG_CHK_UNLOCK_FPS);
+        if (chkUnlock) SendMessageW(chkUnlock, BM_SETCHECK, (idx == 0) ? BST_CHECKED : BST_UNCHECKED, 0);
         write_guest_be32(0x82B31FBC, float_to_be_bits(0.0f));
+        NdSaveSettingsToIni();
         if (NdIsDiagEnabled()) {
           REXLOG_INFO("neverdead: [CONFIG-UI] Limite de framerate: {:.1f} FPS (pacer host)",
                       target);
@@ -2369,8 +2868,8 @@ static LRESULT CALLBACK NdConfigWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPAR
               SendMessageW(reinterpret_cast<HWND>(lParam), BM_GETCHECK, 0, 0) == BST_CHECKED;
           write_guest_u8(t.va, on ? 1 : 0);
           if (t.va2 != 0) write_guest_u8(t.va2, on ? 1 : 0);
+          NdSaveSettingsToIni();
           if (NdIsDiagEnabled()) {
-            // t.label es wchar_t*: fmt no acepta punteros anchos, se loguea el id.
             REXLOG_INFO("neverdead: [CONFIG-UI] toggle id={} (va=0x{:08X}) = {}", t.id, t.va,
                         on ? 1 : 0);
           }
@@ -2408,15 +2907,14 @@ static void NdRunConfigUIDialog() {
   wc.lpszClassName = L"NeverDeadConfigClass";
   RegisterClassExW(&wc);
 
-  // 520x320 de area cliente exacta, centrada en pantalla.
-  RECT rc = {0, 0, 520, 370};
+  RECT rc = {0, 0, 520, 355};
   AdjustWindowRectEx(&rc, WS_POPUP | WS_CAPTION | WS_SYSMENU, FALSE, 0);
   const int w = rc.right - rc.left;
   const int h = rc.bottom - rc.top;
   const int x = (GetSystemMetrics(SM_CXSCREEN) - w) / 2;
   const int y = (GetSystemMetrics(SM_CYSCREEN) - h) / 2;
 
-  HWND hwnd = CreateWindowExW(0, L"NeverDeadConfigClass", L"NeverDeth — Ajustes (F1)",
+  HWND hwnd = CreateWindowExW(0, L"NeverDeadConfigClass", L"Neverdeth (v0.1.0-alpha) — Settings (F10)",
                               WS_POPUP | WS_CAPTION | WS_SYSMENU, x, y, w, h, nullptr, nullptr,
                               hInst, nullptr);
   if (hwnd == nullptr) {
@@ -2425,9 +2923,19 @@ static void NdRunConfigUIDialog() {
   }
   g_config_hwnd = hwnd;
   NdSetDarkTitleBar(hwnd);
-  // Icono NEVERDETH en la barra de titulo y en Alt+Tab.
-  HICON ico = reinterpret_cast<HICON>(LoadImageW(nullptr, L"config/neverdeth.ico",
-                                                 IMAGE_ICON, 32, 32, LR_LOADFROMFILE));
+  // Icono NEVERDETH en la barra de titulo y en Alt+Tab (embebido ID 1 o fallback relativo)
+  HICON ico = LoadIconW(GetModuleHandleW(nullptr), MAKEINTRESOURCEW(1));
+  if (ico == nullptr) {
+    wchar_t exe_buf[MAX_PATH] = {};
+    GetModuleFileNameW(nullptr, exe_buf, MAX_PATH);
+    std::filesystem::path exe_dir = std::filesystem::path(exe_buf).parent_path();
+    std::filesystem::path ico_path = exe_dir / "config" / "neverdeth.ico";
+    if (!std::filesystem::exists(ico_path)) {
+      ico_path = exe_dir.parent_path() / "config" / "neverdeth.ico";
+    }
+    ico = reinterpret_cast<HICON>(LoadImageW(nullptr, ico_path.wstring().c_str(),
+                                             IMAGE_ICON, 32, 32, LR_LOADFROMFILE));
+  }
   if (ico != nullptr) {
     SendMessageW(hwnd, WM_SETICON, ICON_SMALL, reinterpret_cast<LPARAM>(ico));
     SendMessageW(hwnd, WM_SETICON, ICON_BIG, reinterpret_cast<LPARAM>(ico));
@@ -2482,10 +2990,8 @@ static void NdInitFpsMode() {
   if (g_fps_mode_initialized.exchange(true)) {
     return;
   }
-  // 0.0f = sin limite. Es el modo con el que el motor Asura SI avanza: con
-  // 60.0f el invitado se queda esperando vblanks que nunca llegan tras el
-  // primer VdSwap y la ventana queda en negro (ver docs/HANDOFF).
-  float target = 30.0f;  // ALPHA: linea base para PCs de gama baja
+  NdLoadSettingsFromIni();
+  float target = g_fps_target.load(std::memory_order_relaxed);
   const char* env = std::getenv("ND_FPS_LIMIT");
   if (env != nullptr) {
     const float v = static_cast<float>(std::atof(env));
@@ -2493,9 +2999,15 @@ static void NdInitFpsMode() {
       target = v;
     }
   }
+  const char* env_unlock = std::getenv("ND_UNLOCK_FPS");
+  if (env_unlock != nullptr && env_unlock[0] == '1') {
+    g_unlock_fps.store(true, std::memory_order_relaxed);
+    target = 0.0f;
+  }
   g_fps_target.store(target, std::memory_order_relaxed);
   NdSyncFpsClampMemory(target);
-  REXLOG_INFO("neverdead: [FPS] Inicializado a {:.1f} FPS (0.0 = desbloqueado)", target);
+  REXLOG_INFO("neverdead: [FPS] Inicializado a {:.1f} FPS (0.0 = desbloqueado, unlock={})",
+              target, g_unlock_fps.load());
 }
 static void NdCheckFpsToggleKey() {
   NdInitFpsMode();
@@ -2503,17 +3015,18 @@ static void NdCheckFpsToggleKey() {
   SHORT f8_state = GetAsyncKeyState(0x77); // VK_F8
   bool f8_down = (f8_state & 0x8000) != 0;
   if (f8_down && !s_f8_was_down.exchange(true)) {
-    float cur = g_fps_target.load(std::memory_order_relaxed);
-    float next = (cur > 0.0f && cur <= 35.0f) ? 0.0f : 30.0f;
+    bool cur_unlock = g_unlock_fps.load(std::memory_order_relaxed);
+    bool next_unlock = !cur_unlock;
+    g_unlock_fps.store(next_unlock, std::memory_order_relaxed);
+    float next = next_unlock ? 0.0f : 30.0f;
     g_fps_target.store(next, std::memory_order_relaxed);
     NdSyncFpsClampMemory(next);
+    NdSaveSettingsToIni();
     REXLOG_INFO("neverdead: [FPS-TOGGLE] *** F8 PULSADO: Modo alternado a {} (0x82B31FBC sincronizado) ***",
-                (next <= 0.0f) ? "Desbloqueado (72+ FPS / 0.0f)" : "30 FPS (30.0f)");
+                next_unlock ? "Desbloqueado (72+ FPS / 0.0f)" : "30 FPS (30.0f)");
   } else if (!f8_down && s_f8_was_down.load(std::memory_order_relaxed)) {
     s_f8_was_down.store(false, std::memory_order_relaxed);
   }
-  // F1 ya NO se sondea aqui: lo gestiona el timer de 16 ms de la ventana del
-  // menu (funciona con el foco en el juego o en el menu). Ver NdConfigWndProc.
 }
 
 void NdForceIntervalOneHook(PPCRegister& r11) {
@@ -2532,3 +3045,368 @@ void NdSetFpsLimitHook(PPCRegister& f0) {
   f0.f32 = 0.0f;
   NdSyncFpsClampMemory(0.0f);
 }
+
+void NdAutoAdvanceInput(PPCContext& ctx, uint8_t* base, uint32_t guest_state) {
+  // Solo aplicar para player 0 (o broadcast si r3==254)
+  if (ctx.r3.u32 != 0 && ctx.r3.u32 != 254 && ctx.r3.u32 != 1167) {
+    return;
+  }
+  // Si ya estamos en el hospital 3D (confirmado por NdRingProbe con draws>=400), desactivar
+  if (g_hospital_reached.load(std::memory_order_relaxed)) {
+    return;
+  }
+
+  static const bool s_enabled = []() {
+    const char* env = std::getenv("ND_AUTO_NAV");
+    if (env != nullptr) {
+      return (std::atoi(env) == 1);
+    }
+    return false;
+  }();
+  if (!s_enabled) return;
+
+  static const auto s_t0 = std::chrono::steady_clock::now();
+  const auto now = std::chrono::steady_clock::now();
+  const auto elapsed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(now - s_t0).count();
+
+  // Ciclo continuo de pulsos: cada 1200 ms (1.2 s) un pulso de 400 ms
+  // USER REQUIREMENT: "Debes primero apretar start y luego a y a y a para llegar al escenario 3d"
+  const uint64_t cycle_ms = 1200;
+  const uint64_t phase = elapsed_ms % cycle_ms;
+  const bool button_down = (phase < 400);
+
+  uint16_t inject_btn = 0;
+  const char* btn_name = "NONE";
+
+  if (button_down) {
+    if (elapsed_ms < 16000) {
+      // Hasta los 16s: pulsar START repetidamente para cruzar la pantalla de titulo
+      inject_btn = 0x0010; // XINPUT_GAMEPAD_START
+      btn_name = "START";
+    } else {
+      // Despues de los 16s: pulsar A continuamente cada 1.2s para cruzar Campaña, Dificultad,
+      // Confirmar partida y saltar cinemática hasta entrar al pasillo 3D del hospital
+      inject_btn = 0x1000; // XINPUT_GAMEPAD_A
+      btn_name = "A";
+    }
+  }
+
+  static bool s_was_down = false;
+  if (button_down && !s_was_down) {
+    s_was_down = true;
+    REXLOG_INFO("neverdead: [AUTO-NAV] t={:.1f}s -> Pulsando {}", elapsed_ms / 1000.0, btn_name);
+  } else if (!button_down && s_was_down) {
+    s_was_down = false;
+  }
+
+  if (inject_btn != 0 && guest_state != 0 && base != nullptr) {
+    uint8_t* p8 = base + (guest_state + 8);
+    uint8_t* p4 = base + (guest_state + 4);
+
+    uint16_t cur8 = (static_cast<uint16_t>(p8[0]) << 8) | p8[1];
+    cur8 |= inject_btn;
+    p8[0] = static_cast<uint8_t>(cur8 >> 8);
+    p8[1] = static_cast<uint8_t>(cur8 & 0xFF);
+
+    uint16_t cur4 = (static_cast<uint16_t>(p4[0]) << 8) | p4[1];
+    cur4 |= inject_btn;
+    p4[0] = static_cast<uint8_t>(cur4 >> 8);
+    p4[1] = static_cast<uint8_t>(cur4 & 0xFF);
+
+    // Forzar codigo de retorno 0 (ERROR_SUCCESS)
+    ctx.r3.s64 = 0;
+  }
+}
+
+//=============================================================================
+// Fallback automatico CESA.bik -> Front_End.bik
+//=============================================================================
+void NdEnsureCesaBik(const std::filesystem::path& target_assets_dir) {
+  nd::extractor::EnsureCesaBik(target_assets_dir);
+}
+
+void NdEnsureAssetJunctionsOrLinks(const std::filesystem::path& base_dir, const std::filesystem::path& assets_dir) {
+  nd::extractor::NdEnsureAssetJunctionsOrLinks(base_dir, assets_dir);
+}
+
+//=============================================================================
+// Asistente Win32 de Primer Inicio (Game Data Setup) - 100% C++20 Nativo
+//=============================================================================
+void NdRunFirstLaunchSetupWizard(const std::filesystem::path& target_assets_dir) {
+  HINSTANCE hInst = GetModuleHandle(nullptr);
+  WNDCLASSEXW wc{};
+  wc.cbSize = sizeof(wc);
+  wc.style = CS_HREDRAW | CS_VREDRAW;
+  wc.lpfnWndProc = [](HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) -> LRESULT {
+    static HBRUSH s_bg_brush = CreateSolidBrush(RGB(22, 22, 28));
+    static std::filesystem::path s_target_assets;
+
+    switch (msg) {
+      case WM_CREATE: {
+        auto* cs = reinterpret_cast<CREATESTRUCTW*>(lParam);
+        if (cs && cs->lpCreateParams) {
+          s_target_assets = *reinterpret_cast<std::filesystem::path*>(cs->lpCreateParams);
+        }
+        NdSetDarkTitleBar(hwnd);
+
+        HFONT hTitleFont = CreateFontW(20, 0, 0, 0, FW_BOLD, FALSE, FALSE, FALSE, DEFAULT_CHARSET,
+                                      OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
+                                      DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
+        HFONT hFont = CreateFontW(15, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE, DEFAULT_CHARSET,
+                                  OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
+                                  DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
+        HFONT hBtnFont = CreateFontW(15, 0, 0, 0, FW_SEMIBOLD, FALSE, FALSE, FALSE, DEFAULT_CHARSET,
+                                     OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
+                                     DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
+
+        HWND lblTitle = CreateWindowW(L"STATIC", L"Neverdeth (v0.1.0-alpha) — Game Data Setup",
+                                      WS_CHILD | WS_VISIBLE, 20, 15, 480, 26, hwnd, nullptr, nullptr, nullptr);
+        SendMessageW(lblTitle, WM_SETFONT, reinterpret_cast<WPARAM>(hTitleFont), TRUE);
+
+        HWND lblInfo = CreateWindowW(L"STATIC",
+                                     L"No game assets were found in 'assets/'.\n"
+                                     L"To play Neverdeth, please provide your legal copy of the Xbox 360 release (Title ID 4B4E081F).\n"
+                                     L"Select one of the installation sources below:",
+                                     WS_CHILD | WS_VISIBLE, 20, 48, 480, 56, hwnd, nullptr, nullptr, nullptr);
+        SendMessageW(lblInfo, WM_SETFONT, reinterpret_cast<WPARAM>(hFont), TRUE);
+
+        HWND btnIso = CreateWindowW(L"BUTTON", L"Select ISO Image (.iso) or GOD Container (.data)",
+                                    WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON | BS_OWNERDRAW,
+                                    20, 115, 480, 36, hwnd, reinterpret_cast<HMENU>(2001), nullptr, nullptr);
+        SendMessageW(btnIso, WM_SETFONT, reinterpret_cast<WPARAM>(hBtnFont), TRUE);
+        NdDisableTheme(btnIso);
+
+        HWND btnFolder = CreateWindowW(L"BUTTON", L"Select Extracted Game Folder",
+                                       WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON | BS_OWNERDRAW,
+                                       20, 160, 480, 36, hwnd, reinterpret_cast<HMENU>(2002), nullptr, nullptr);
+        SendMessageW(btnFolder, WM_SETFONT, reinterpret_cast<WPARAM>(hBtnFont), TRUE);
+        NdDisableTheme(btnFolder);
+
+        HWND btnExit = CreateWindowW(L"BUTTON", L"Exit",
+                                     WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON | BS_OWNERDRAW,
+                                     20, 205, 480, 32, hwnd, reinterpret_cast<HMENU>(2003), nullptr, nullptr);
+        SendMessageW(btnExit, WM_SETFONT, reinterpret_cast<WPARAM>(hBtnFont), TRUE);
+        NdDisableTheme(btnExit);
+
+        HWND lblStatus = CreateWindowW(L"STATIC", L"", WS_CHILD, 20, 248, 480, 24,
+                                       hwnd, reinterpret_cast<HMENU>(2004), nullptr, nullptr);
+        SendMessageW(lblStatus, WM_SETFONT, reinterpret_cast<WPARAM>(hFont), TRUE);
+        return 0;
+      }
+      case WM_ERASEBKGND: {
+        RECT rc{};
+        GetClientRect(hwnd, &rc);
+        FillRect(reinterpret_cast<HDC>(wParam), &rc, s_bg_brush);
+        return 1;
+      }
+      case WM_CTLCOLORSTATIC: {
+        HDC hdc = reinterpret_cast<HDC>(wParam);
+        SetTextColor(hdc, RGB(235, 235, 240));
+        SetBkColor(hdc, RGB(22, 22, 28));
+        return reinterpret_cast<LRESULT>(s_bg_brush);
+      }
+      case WM_DRAWITEM: {
+        const DRAWITEMSTRUCT* dis = reinterpret_cast<const DRAWITEMSTRUCT*>(lParam);
+        if (dis == nullptr || dis->CtlType != ODT_BUTTON) break;
+        const bool pressed = (dis->itemState & ODS_SELECTED) != 0;
+        HBRUSH face = CreateSolidBrush(pressed ? RGB(48, 40, 32) : RGB(32, 29, 27));
+        FillRect(dis->hDC, &dis->rcItem, face);
+        DeleteObject(face);
+        const bool is_exit = (dis->CtlID == 2003);
+        HPEN pen = CreatePen(PS_SOLID, 1, is_exit ? RGB(180, 70, 60) : RGB(200, 138, 50));
+        HGDIOBJ old_pen = SelectObject(dis->hDC, pen);
+        HGDIOBJ old_brush = SelectObject(dis->hDC, GetStockObject(NULL_BRUSH));
+        Rectangle(dis->hDC, dis->rcItem.left, dis->rcItem.top, dis->rcItem.right, dis->rcItem.bottom);
+        SelectObject(dis->hDC, old_brush);
+        SelectObject(dis->hDC, old_pen);
+        DeleteObject(pen);
+        wchar_t text[128] = {};
+        GetWindowTextW(dis->hwndItem, text, 128);
+        SetBkMode(dis->hDC, TRANSPARENT);
+        SetTextColor(dis->hDC, is_exit ? RGB(240, 160, 150) : RGB(242, 225, 195));
+        HFONT font = reinterpret_cast<HFONT>(SendMessageW(dis->hwndItem, WM_GETFONT, 0, 0));
+        HGDIOBJ old_font = font ? SelectObject(dis->hDC, font) : nullptr;
+        RECT rc_text = dis->rcItem;
+        DrawTextW(dis->hDC, text, -1, &rc_text, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+        if (old_font != nullptr) SelectObject(dis->hDC, old_font);
+        return TRUE;
+      }
+      case WM_COMMAND: {
+        const int id = LOWORD(wParam);
+        if (id == 2003) { // Exit
+          ExitProcess(0);
+          return 0;
+        }
+
+        auto run_extraction_async = [&](const std::filesystem::path& input_path) {
+          HWND btn1 = GetDlgItem(hwnd, 2001);
+          HWND btn2 = GetDlgItem(hwnd, 2002);
+          HWND btn3 = GetDlgItem(hwnd, 2003);
+          HWND lblStat = GetDlgItem(hwnd, 2004);
+          if (btn1) EnableWindow(btn1, FALSE);
+          if (btn2) EnableWindow(btn2, FALSE);
+          if (btn3) EnableWindow(btn3, FALSE);
+          if (lblStat) {
+            SetWindowTextW(lblStat, L"Preparing extraction... Please wait.");
+            ShowWindow(lblStat, SW_SHOW);
+          }
+
+          std::atomic<bool> worker_done{false};
+          std::atomic<bool> worker_ok{false};
+          std::wstring status_str = L"Starting extraction...";
+          std::mutex status_mtx;
+
+          std::thread worker([&]() {
+            bool ok = nd::extractor::ExtractAll(input_path, s_target_assets,
+              [&](const std::string& rel_file, uint64_t done_bytes, uint64_t total_bytes, float frac) {
+                int pct = static_cast<int>(frac * 100.0f);
+                if (pct > 100) pct = 100;
+                std::string fname = std::filesystem::path(rel_file).filename().string();
+                std::wstring msg = L"Extracting (" + std::to_wstring(pct) + L"%): ";
+                msg.append(fname.begin(), fname.end());
+                {
+                  std::lock_guard<std::mutex> lk(status_mtx);
+                  status_str = msg;
+                }
+                return true;
+              });
+            nd::extractor::EnsureCesaBik(s_target_assets);
+            worker_ok.store(ok);
+            worker_done.store(true);
+          });
+
+          // Bombeo de mensajes Win32 para no congelar la ventana durante la extraccion
+          while (!worker_done.load(std::memory_order_relaxed)) {
+            MSG pump_msg{};
+            while (PeekMessageW(&pump_msg, nullptr, 0, 0, PM_REMOVE)) {
+              TranslateMessage(&pump_msg);
+              DispatchMessageW(&pump_msg);
+            }
+            if (lblStat) {
+              std::lock_guard<std::mutex> lk(status_mtx);
+              SetWindowTextW(lblStat, status_str.c_str());
+            }
+            Sleep(20);
+          }
+
+          if (worker.joinable()) {
+            worker.join();
+          }
+
+          std::error_code ec;
+          if (std::filesystem::exists(s_target_assets / "default.xex", ec)) {
+            MessageBoxW(hwnd, L"Game data extracted and verified successfully!\nStarting Neverdeth...",
+                        L"Neverdeth Setup Complete", MB_OK | MB_ICONINFORMATION);
+            DestroyWindow(hwnd);
+          } else {
+            if (btn1) EnableWindow(btn1, TRUE);
+            if (btn2) EnableWindow(btn2, TRUE);
+            if (btn3) EnableWindow(btn3, TRUE);
+            if (lblStat) SetWindowTextW(lblStat, L"Extraction failed. Please verify the source.");
+            MessageBoxW(hwnd,
+                        L"Extraction failed or default.xex was not found in assets/.\n"
+                        L"Please ensure the file is an unencrypted Xbox 360 copy of NeverDead / Neverdeth (4B4E081F).",
+                        L"Setup Incomplete", MB_OK | MB_ICONWARNING);
+          }
+        };
+
+        if (id == 2001) { // Select ISO or GOD
+          HMODULE hComDlg = LoadLibraryW(L"comdlg32.dll");
+          if (hComDlg) {
+            using Fn = BOOL(WINAPI*)(LPOPENFILENAMEW);
+            auto fn = reinterpret_cast<Fn>(GetProcAddress(hComDlg, "GetOpenFileNameW"));
+            if (fn) {
+              wchar_t file_buf[MAX_PATH] = {};
+              OPENFILENAMEW ofn{};
+              ofn.lStructSize = sizeof(ofn);
+              ofn.hwndOwner = hwnd;
+              ofn.lpstrFilter = L"Xbox 360 Disc Image or GOD Container (*.iso;*.data;Data0000;*)\0*.iso;*.data;Data0000;*\0All Files (*.*)\0*.*\0";
+              ofn.lpstrFile = file_buf;
+              ofn.nMaxFile = MAX_PATH;
+              ofn.lpstrTitle = L"Select Xbox 360 ISO Image or GOD Container (NeverDead 4B4E081F)";
+              ofn.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST;
+              if (fn(&ofn)) {
+                run_extraction_async(std::filesystem::path(file_buf));
+              }
+            }
+          }
+          return 0;
+        }
+        if (id == 2002) { // Select Extracted Game Folder
+          HMODULE hShell = LoadLibraryW(L"shell32.dll");
+          if (hShell) {
+            using BrowseFn = PIDLIST_ABSOLUTE(WINAPI*)(LPBROWSEINFOW);
+            using PathFn = BOOL(WINAPI*)(PCIDLIST_ABSOLUTE, LPWSTR);
+            auto fnBrowse = reinterpret_cast<BrowseFn>(GetProcAddress(hShell, "SHBrowseForFolderW"));
+            auto fnPath = reinterpret_cast<PathFn>(GetProcAddress(hShell, "SHGetPathFromIDListW"));
+            if (fnBrowse && fnPath) {
+              BROWSEINFOW bi{};
+              bi.hwndOwner = hwnd;
+              bi.lpszTitle = L"Select folder containing extracted Xbox 360 assets (default.xex)";
+              bi.ulFlags = BIF_RETURNONLYFSDIRS | BIF_NEWDIALOGSTYLE;
+              PIDLIST_ABSOLUTE pidl = fnBrowse(&bi);
+              if (pidl) {
+                wchar_t folder_buf[MAX_PATH] = {};
+                if (fnPath(pidl, folder_buf)) {
+                  run_extraction_async(std::filesystem::path(folder_buf));
+                }
+              }
+            }
+          }
+          return 0;
+        }
+        break;
+      }
+      case WM_CLOSE: {
+        ExitProcess(0);
+        return 0;
+      }
+      case WM_DESTROY: {
+        PostQuitMessage(0);
+        return 0;
+      }
+    }
+    return DefWindowProcW(hwnd, msg, wParam, lParam);
+  };
+  wc.hInstance = hInst;
+  wc.hCursor = LoadCursor(nullptr, IDC_ARROW);
+  wc.lpszClassName = L"NeverDeadSetupClass";
+  RegisterClassExW(&wc);
+
+  RECT rc = {0, 0, 520, 285};
+  AdjustWindowRectEx(&rc, WS_POPUP | WS_CAPTION | WS_SYSMENU, FALSE, 0);
+  const int w = rc.right - rc.left;
+  const int h = rc.bottom - rc.top;
+  const int x = (GetSystemMetrics(SM_CXSCREEN) - w) / 2;
+  const int y = (GetSystemMetrics(SM_CYSCREEN) - h) / 2;
+
+  std::filesystem::path target_copy = target_assets_dir;
+  HWND hwnd = CreateWindowExW(0, L"NeverDeadSetupClass", L"Neverdeth (v0.1.0-alpha) — Game Data Setup",
+                              WS_POPUP | WS_CAPTION | WS_SYSMENU, x, y, w, h, nullptr, nullptr,
+                              hInst, &target_copy);
+  if (!hwnd) {
+    ExitProcess(0);
+  }
+
+  HICON ico_setup = LoadIconW(GetModuleHandleW(nullptr), MAKEINTRESOURCEW(1));
+  if (ico_setup != nullptr) {
+    SendMessageW(hwnd, WM_SETICON, ICON_SMALL, reinterpret_cast<LPARAM>(ico_setup));
+    SendMessageW(hwnd, WM_SETICON, ICON_BIG, reinterpret_cast<LPARAM>(ico_setup));
+  }
+
+  ShowWindow(hwnd, SW_SHOW);
+  UpdateWindow(hwnd);
+  SetForegroundWindow(hwnd);
+
+  MSG msg{};
+  while (GetMessageW(&msg, nullptr, 0, 0) > 0) {
+    TranslateMessage(&msg);
+    DispatchMessageW(&msg);
+  }
+
+  std::error_code ec;
+  if (!std::filesystem::exists(target_assets_dir / "default.xex", ec)) {
+    ExitProcess(0);
+  }
+}
+

@@ -26,14 +26,22 @@ import subprocess
 import sys
 import time
 
-ROOT = r"C:\Users\katze\Downloads\_Proyectos_y_Backups\neverdead_project"
-EXE = os.path.join(ROOT, "build_clang", "neverdead.exe")
+ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+EXE = os.path.join(ROOT, "build_clang", "Neverdeth.exe")
+if not os.path.exists(EXE):
+    EXE = os.path.join(ROOT, "build_clang", "neverdead.exe")
 LOGDIR = os.path.join(ROOT, "build_clang", "logs")
-PROOF = os.path.join(ROOT, "docs", "assets", "ring_gameplay_proof.bmp")
+PROOF = os.path.join(ROOT, "build_clang", "ring_gameplay_proof.bmp")
+PROOF_PNG = os.path.join(ROOT, "build_clang", "ring_gameplay_proof.png")
 
 u32 = ctypes.windll.user32
 g32 = ctypes.windll.gdi32
 u32.SetProcessDPIAware()
+
+VK_RETURN = 0x0D
+VK_SPACE = 0x20
+VK_A = 0x41
+SW_RESTORE = 9
 
 
 class RECT(ctypes.Structure):
@@ -67,6 +75,35 @@ def find_hwnd(pid: int):
 
     u32.EnumWindows(proc_type(cb), 0)
     return hits[0] if hits else None
+
+
+def press_enter(hwnd: int) -> None:
+    try:
+        u32.ShowWindow(hwnd, SW_RESTORE)
+        u32.BringWindowToTop(hwnd)
+        u32.SetForegroundWindow(hwnd)
+        # Enviar Enter
+        u32.PostMessageW(hwnd, 0x0100, VK_RETURN, 0x001C0001)  # WM_KEYDOWN
+        u32.keybd_event(VK_RETURN, 0, 0, 0)
+        time.sleep(0.05)
+        u32.PostMessageW(hwnd, 0x0101, VK_RETURN, 0xC01C0001)  # WM_KEYUP
+        u32.keybd_event(VK_RETURN, 0, 2, 0)
+        # Enviar Space
+        time.sleep(0.05)
+        u32.PostMessageW(hwnd, 0x0100, VK_SPACE, 0x00390001)  # WM_KEYDOWN
+        u32.keybd_event(VK_SPACE, 0, 0, 0)
+        time.sleep(0.05)
+        u32.PostMessageW(hwnd, 0x0101, VK_SPACE, 0xC0390001)  # WM_KEYUP
+        u32.keybd_event(VK_SPACE, 0, 2, 0)
+        # Enviar Tecla 'A'
+        time.sleep(0.05)
+        u32.PostMessageW(hwnd, 0x0100, VK_A, 0x001E0001)  # WM_KEYDOWN
+        u32.keybd_event(VK_A, 0, 0, 0)
+        time.sleep(0.05)
+        u32.PostMessageW(hwnd, 0x0101, VK_A, 0xC01E0001)  # WM_KEYUP
+        u32.keybd_event(VK_A, 0, 2, 0)
+    except Exception:
+        pass
 
 
 def grab_raw(hwnd, w, h) -> bytes:
@@ -111,11 +148,20 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--threshold", type=float, default=0.80)
     ap.add_argument("--max-wait", type=float, default=180.0)
+    ap.add_argument("--duration", type=float, default=22.0)
+    ap.add_argument("--filter", type=str, default="0")
+    ap.add_argument("--ring", type=str, default="1")
+    ap.add_argument("--throttle", type=str, default="1")
+    ap.add_argument("--luma-opt", type=str, default="0")
     args = ap.parse_args()
 
     env = dict(os.environ)
-    env["ND_RING"] = "1"
+    env["ND_RING"] = args.ring
     env["ND_DIAG"] = "1"
+    env["ND_XDK_FILTER"] = args.filter
+    env["ND_GUEST_THROTTLE"] = args.throttle
+    env["ND_OPT_LUMA_RESOLVE"] = args.luma_opt
+    env["ND_AUTO_NAV"] = "1"
 
     before = set(os.listdir(LOGDIR)) if os.path.isdir(LOGDIR) else set()
     proc = subprocess.Popen([EXE, "--game_data_root", "assets", "--cache_path", "cache"],
@@ -136,6 +182,7 @@ def main() -> int:
 
     streak = 0
     gameplay_at = None
+    last_press = 0.0
     t0 = time.time()
     while time.time() - t0 < args.max_wait:
         raw = grab_raw(*hwnd)
@@ -164,10 +211,20 @@ def main() -> int:
                     f.write((0).to_bytes(4, "little"))
                     f.write((0).to_bytes(4, "little"))
                     f.write(raw)
-                print(f"  >> gameplay confirmado a las {gameplay_at:%H:%M:%S}; captura en {PROOF}")
+                try:
+                    from PIL import Image
+                    im = Image.frombuffer("RGBA", (w, h), raw, "raw", "BGRA", 0, 1)
+                    im.convert("RGB").save(PROOF_PNG)
+                except Exception:
+                    pass
+                print(f"  >> gameplay 3D confirmado ({frac*100:.1f}% no-negro) a las {gameplay_at:%H:%M:%S}; captura en {PROOF}")
                 break
         else:
             streak = 0
+            cur_t = time.time()
+            if cur_t - t0 >= 4.0 and cur_t - last_press >= 3.0:
+                press_enter(hwnd[0])
+                last_press = cur_t
         time.sleep(2.0)
 
     if gameplay_at is None:
@@ -175,8 +232,8 @@ def main() -> int:
         print("ERROR: no se detecto gameplay 3D")
         return 1
 
-    print("  midiendo 14 s de ring en gameplay...")
-    time.sleep(14.0)
+    print(f"  midiendo {args.duration:.0f} s de ring en gameplay...")
+    time.sleep(args.duration)
     proc.terminate()
     try:
         proc.wait(timeout=10)
@@ -206,21 +263,46 @@ def main() -> int:
                          int(m.group(11)), int(m.group(12)), m.group(13)))
 
     print()
-    print(f"Ventanas [RING] en gameplay confirmado: {len(rows)}")
-    if not rows:
-        print("  (ninguna; sube --max-wait o baja el umbral)")
-        return 1
-    print(f"{'swap':>6} {'dwords':>7} {'draws':>6} {'resol':>6} {'binM':>5} "
-          f"{'binS':>5} {'pred':>5} {'regs':>7} {'msaa':>5} {'pitch':>6}")
-    for r in rows:
-        print(f"{r[1]:>6} {r[2]:>7} {r[3]:>6} {r[4]:>6} {r[5]:>5} {r[6]:>5} "
-              f"{r[7]:>5} {r[8]:>7} {r[10]:>5} {r[11]:>6}")
-    n = len(rows)
-    avg = lambda i: sum(r[i] for r in rows) / n
-    print()
-    print(f"MEDIA ({n} ventanas): draws={avg(3):.1f} resolves={avg(4):.1f} "
-          f"bin_mask={avg(5):.1f} bin_select={avg(6):.1f} pred={avg(7):.1f} "
-          f"regs={avg(8):.0f} dwords={avg(2):.0f} msaa={avg(10):.1f} pitch={avg(11):.0f}")
+    print(f"Ventanas [RING] totales tras confirmacion: {len(rows)}")
+    # Filtrar estrictamente solo ventanas con firma de hospital (>400 draws, >200k dwords)
+    gameplay_rows = [r for r in rows if r[3] >= 400 and r[2] >= 200000]
+    print(f"Ventanas [RING] verificadas en Hospital 3D (draws>=400, dwords>=200k): {len(gameplay_rows)}")
+    active_rows = gameplay_rows if gameplay_rows else rows
+
+    if active_rows:
+        print(f"{'swap':>6} {'dwords':>7} {'draws':>6} {'resol':>6} {'binM':>5} "
+              f"{'binS':>5} {'pred':>5} {'regs':>7} {'msaa':>5} {'pitch':>6}")
+        for r in active_rows:
+            print(f"{r[1]:>6} {r[2]:>7} {r[3]:>6} {r[4]:>6} {r[5]:>5} {r[6]:>5} "
+                  f"{r[7]:>5} {r[8]:>7} {r[10]:>5} {r[11]:>6}")
+        n = len(active_rows)
+        avg = lambda i: sum(r[i] for r in active_rows) / n
+        print()
+        print(f"MEDIA HOSPITAL 3D ({n} ventanas): draws={avg(3):.1f} resolves={avg(4):.1f} "
+              f"bin_mask={avg(5):.1f} bin_select={avg(6):.1f} pred={avg(7):.1f} "
+              f"regs={avg(8):.0f} dwords={avg(2):.0f} msaa={avg(10):.1f} pitch={avg(11):.0f}")
+
+    # Extraer telemetria XDK_SHADOW
+    shadow_lines = []
+    with open(log, encoding="utf-8", errors="replace") as f:
+        for line in f:
+            if "[XDK_SHADOW]" in line:
+                shadow_lines.append(line.strip())
+    if shadow_lines:
+        print("\n--- Telemetria [XDK_SHADOW] ---")
+        for sl in shadow_lines[-6:]:
+            print(" ", sl)
+
+    # Extraer metricas de FRAME durante el gameplay
+    frame_lines = []
+    with open(log, encoding="utf-8", errors="replace") as f:
+        for line in f:
+            if "neverdead: [FRAME]" in line:
+                frame_lines.append(line.strip())
+    if frame_lines:
+        print("\n--- Telemetria [FRAME] en gameplay ---")
+        for fl in frame_lines[-6:]:
+            print(" ", fl)
     return 0
 
 

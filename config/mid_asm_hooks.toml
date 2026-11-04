@@ -22,11 +22,10 @@ address = 0x826B89A0
 name = "NdVdSwapHook"
 registers = ["r31"]
 
-# Instruccion siguiente a "bl VdSwap" (addi r11,r30,256): el frame ya esta
-# encolado y el presentador puede consumirlo. Aqui SI es seguro frenar al
-# invitado (antes del bl se estrangula al presentador -> 39->17 FPS medido).
+# Instruccion posterior a "stw r11,48(r31)" (loc_826B89AC): el frame ya esta
+# encolado, [dev+48] ya avanzo y el presentador puede consumirlo sin contencion.
 [[midasm_hook]]
-address = 0x826B89A4
+address = 0x826B8DCC
 name = "NdVdSwapPostHook"
 registers = ["r31"]
 

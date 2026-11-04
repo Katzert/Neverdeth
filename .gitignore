@@ -1,33 +1,81 @@
-# NeverDead PC Recompilation (ReXGlue) — Alpha
+# Neverdeth (NeverDead PC Recompilation) — Git Ignore Rules
+_dev_archive/
 /assets/
+/cache/
+/dist/
+/build_clang/
+/generated/
+/graphify-out/
 /FMV
 /Fonts
 /GUIMenu
-/Text
 /misc
 /sounds
-/NeverDead_base.bin
-/build_clang/
-/cache/
-/dist/
-/generated/
-/graphify-out/
+/Text
 /.workbuddy-ai/
 /.agents/
 /.freebuff/
 /.tgrep-index/
-/__pycache__/
-*.log
-*.bmp
-*.png
-*.dmp
+
+# Build artifacts and binaries
 *.exe
 *.dll
 *.pdb
 *.obj
+*.res
+*.dmp
+*.log
+*.bin
 
-# --- Branding versionado (excepciones a *.png / *.bmp de arriba) ---
-!docs/assets/*.png
-!docs/assets/*.bmp
-!config/*.ico
-!config/*.bmp
+# Python cache
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Proprietary assets (Zero tolerance)
+*.xex
+*.iso
+*.data
+*.asrbe
+*.asrBE
+*.bik
+
+# Internal development and audit documents
+*AUDITORIA*
+*auditoria*
+*AUDIT*
+*audit*
+*INFORME*
+*informe*
+*RECAP*
+*recap*
+*MAPA_MOTOR*
+*HANDOFF*
+*handoff*
+*DOSSIER*
+*dossier*
+*REVIEW*
+*review*
+*TAREA3*
+*tarea3*
+BUG_RAIZ_*
+CRT_HELPERS.md
+MASTER_CONTEXT.md
+PLAN_*
+GITHUB_ALPHA_CHECKLIST.md
+checkpoint.md
+grafo_optimizacion.txt
+ARBOL_PROYECTO.txt
+datos_*
+error_log_hoy.txt
+menu_actual.txt
+render_flags_scan.txt
+rex_gpu_cvars_list.txt
+
+# Media rules and branding exceptions
+*.bmp
+*.png
+
+!docs/assets/neverdeth_logo_banner.bmp
+!docs/assets/neverdeth_logo_transparent.png
+!config/neverdeth.ico

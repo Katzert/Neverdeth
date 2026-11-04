@@ -6,6 +6,7 @@
 #pragma once
 
 #include <cstdint>
+#include <filesystem>
 
 #include <rex/ppc.h>
 
@@ -32,8 +33,25 @@ void NdPatchAsyncPipelineCache();
 // el Presenter/ventana) y es idempotente.
 void NdEarlyInit();
 
-// Menu de configuracion UI y optimizaciones (F1)
+// Menu de configuracion UI y optimizaciones (F10 / F1)
 void NdOpenConfigUI();
+void NdLoadSettingsFromIni();
+void NdSaveSettingsToIni();
+void NdRunFirstLaunchSetupWizard(const std::filesystem::path& target_assets_dir);
+void NdEnsureCesaBik(const std::filesystem::path& target_assets_dir);
+void NdEnsureAssetJunctionsOrLinks(const std::filesystem::path& base_dir, const std::filesystem::path& assets_dir);
+
+// Deteccion de estado de render y control de framerate
+bool NdIsFpsUnlocked();
+bool NdIsIn3dGameplay();
+
+// Auto-avance de inicio: Start -> A -> A -> A
+void NdAutoAdvanceInput(PPCContext& ctx, uint8_t* base, uint32_t guest_state);
+
+// Notificacion de draw call ligero y optimizacion de resolves luma
+extern "C" void NdOnDrawCall();
+extern "C" bool NdShouldSkipLumaResolve();
+extern "C" void NdResetXdkShadowStateOnBoundary();
 
 // Traductor guest VA -> host. Lo instala la app; permite a los hooks leer y
 // escribir memoria arbitraria del invitado (no solo la imagen del XEX).

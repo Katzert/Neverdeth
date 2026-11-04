@@ -1,104 +1,78 @@
-<p align="center"><img src="docs/assets/neverdeth_logo.png" width="480"></p>
+<p align="center">
+  <img src="docs/assets/neverdeth_logo_transparent.png" alt="Neverdeth Logo" width="560">
+</p>
 
-# NeverDead — Recompilación PC (ReXGlue) · Alpha v0.1.0
+# Neverdeth
 
-Recompilación estática del *NeverDead* de Xbox 360 a x64 nativo con el SDK
-[ReXGlue](https://github.com/rexglue), usando el plugin GPU **Xenos → D3D12 con ROV**
-(Rasterizer Ordered Views) para emular la eDRAM de 10 MB.
+An unofficial static recompilation of the Xbox 360 release of NeverDead (2012, Title ID 4B4E081F) to native x64 Windows and Direct3D 12.
 
-Proyecto de ingeniería inversa con fines de preservación y estudio.
+> **Note:** This project does not contain any original game assets, proprietary audio/video streams, or copyrighted game code. You must provide your own legally acquired copy of NeverDead (Xbox 360, Title ID 4B4E081F) to extract and play the game.
 
-## Estado
+---
 
-- Arranque, logos, menús y **gameplay 3D** estables.
-- **Menú F1** (Dark Mode nativo, 520×320): perfil *Calidad Original* / *Bajo Consumo
-  (Max FPS)*, 10 pases del renderer, límite de FPS y modo de ventana — todo en vivo.
-- **F8** alterna 60/30 FPS. **F1 / ESC** abren y cierran el menú desde cualquier ventana.
-- Benchmark de referencia (hospital, 720p): **101 FPS** todo ON · **142 FPS** con el
-  perfil Bajo Consumo (16 flags OFF).
+## Features
+- **Native x64 Execution:** PowerPC machine code statically lifted and recompiled to native C++20 and optimized x64 machine code via the ReXGlue SDK.
+- **Direct3D 12 Rendering Backend:** Accurate eDRAM emulation using Rasterizer Ordered Views (ROV / Pixel Shader Interlock) for original Xbox 360 lighting, HDR bloom, and post-processing parity.
+- **High Framerate Support:** Rock-solid 30.0 FPS 1:1 frame-paced presentation by default, with dynamic frame-by-frame hysteresis for unlocked 60+ FPS in 3D combat while automatically protecting menus, loading screens, and Bink FMVs at 30 FPS.
+- **Built-in Native Asset Installer:** Autonomous Win32 setup wizard supporting unencrypted Xbox 360 `.iso` disc images (XISO / XGD2 / XGD3), Games on Demand (`.data`) packages, and extracted game folders without any external dependencies.
+- **In-Game Configuration Menu (F10):** Real-time runtime overlay to adjust framerate limits, window modes, and toggle individual Asura Engine render passes (SSAO, Motion Blur, Shadows, Fog, Adaptive Exposure). Settings persist across sessions in `config/settings.ini`.
 
-## Menú F1
+---
 
-<p align="center"><img src="docs/assets/menu_f1_preview.png" width="520"></p>
+## System Requirements
+- **OS:** Windows 10 (version 20H2+) or Windows 11 (64-bit).
+- **GPU:** DirectX 12 compatible graphics card supporting Rasterizer Ordered Views (ROV):
+  - NVIDIA GeForce GTX 900 series or newer (RTX recommended).
+  - AMD Radeon RX 5000 series or newer.
+  - Intel Arc / Iris Xe or newer.
+- **CPU:** x86-64 processor supporting AVX2 instructions.
+- **Game Copy:** Legally acquired Xbox 360 copy of NeverDead (Title ID `4B4E081F`) in `.iso`, `.data`, or extracted folder format.
 
-Dark mode nativo, 520×370, botones owner-draw carbón/bronce y banner NEVERDETH.
-Perfiles de un clic, 10 pases del renderer con lógica positiva y F1/ESC desde
-cualquier ventana.
+---
 
-## Rendimiento y Referencia para PCs de Gama Baja (30 FPS por defecto)
+## Installation & Quick Start
 
-El juego arranca **limitado a 30 FPS** en el pacer del host. El reloj interno del
-invitado (`0x82B31FBC`) sigue siempre a `0.0f`: si se le escribe otro valor, el motor
-Asura se queda esperando vblanks tras el tercer `[SWAP]`.
+1. Download [`Neverdeth-v0.1.0-alpha-win64.zip`](https://github.com/neverdeth/neverdeth/releases) and extract the archive to a clean folder.
+2. Launch `Neverdeth.exe`.
+3. On first startup, the setup wizard will appear. Select your Xbox 360 `.iso` image, `.data` GOD container, or extracted game folder containing `default.xex`.
+4. The game will extract and verify required assets into `assets/` and launch immediately.
+5. Press `F10` during gameplay at any time to open the configuration menu.
 
-Medido en la escena del hospital (RTX 2060, límite 160 W), 15 s de muestreo con
-`nvidia-smi` cada 500 ms:
-
-| Caso | Configuración | GPU | Potencia | ms/frame | FPS (bucle invitado) |
-|---|---|---|---|---|---|
-| 1 | 30 FPS + Bajo Consumo (16 flags OFF) | **25,3 %** | **40,0 W** | 30,87 | 32,4 |
-| 2 | 30 FPS + Calidad Original (todo ON) | **41,9 %** | **64,6 W** | 28,00 | 35,7 |
-| 3 | Ilimitado + Calidad Original | **97,3 %** | **97,9 W** | 10,51 | 95,2 |
-
-**Lectura:** el límite de 30 FPS baja la GPU del 97 % al 42 % con todo encendido
-(−57 puntos) y ahorra ~33 W; con el perfil Bajo Consumo se queda en el 25 % y 40 W.
-La columna FPS es el bucle del invitado; la presentación real la fija el pacer a 30.
-
-Reproducible con `python tools/bench_gpu.py 1|2|3`.
-
-## Requisitos
-
-- Windows 10/11 x64, GPU con D3D12 y **ROV Tier 1+** (y *tiled resources* para el
-  buffer de memoria compartida).
-- LLVM/Clang + Ninja + CMake ≥ 3.25 y las *Build Tools* de MSVC 2022 (headers/libs).
-- SDK **ReXGlue 0.10.0** (`REXSDK_DIR` o en `CMAKE_PREFIX_PATH`).
-- **Tu propia copia del juego**: `NeverDead_base.bin` y `assets/` **no se distribuyen**.
-
-## Compilar
-
-```bat
-build_ninja.bat
-:: o bien
-cmake --preset clang && ninja -C build_clang neverdead
+*Alternatively, you can extract assets manually via CLI:*
+```powershell
+python tools/extract_neverdead_assets.py --input <path_to_game_dump> --output assets
 ```
 
-### Parche obligatorio del SDK: `fpscr` / `ldmxcsr`
+---
 
-El codegen emite **34.754** llamadas `ctx.fpscr.enable/disableFlushMode()` (una por
-instrucción VMX). En el SDK original cada transición escribe `MXCSR` (`ldmxcsr`), lo que
-serializa el pipeline de la CPU miles de veces por frame.
+## Building from Source
 
-Copia `patches/sdk/rex/ppc/context.h` sobre
-`<SDK>/include/rex/ppc/context.h` **antes de compilar**. El parche:
+### Prerequisites
+- Windows 10/11 x64
+- Visual Studio 2022 Build Tools (Desktop development with C++)
+- LLVM / Clang 18+ (`clang++`, `clang`, `llvm-rc`, `lld-link`)
+- CMake 3.25+
+- Ninja 1.11+
+- Python 3.10+
 
-- convierte las cuatro variantes `*FlushMode()` en **solo-bandera** (0 escrituras MXCSR),
-- fija `FTZ|DAZ` en `setcsr()` e `InitHost()` (comportamiento VMX de Xenon),
-- y el pin por hilo vive en `src/nd_import_diag.h` (`NdiPinFlushToZero`).
+### Build Steps
 
-Verificado: `ldmxcsr` por unidad de traducción **283 → 0**.
+```powershell
+# 1. Configure the build directory with CMake and Clang
+cmake -B build_clang -G Ninja -DCMAKE_CXX_COMPILER="clang++" -DCMAKE_C_COMPILER="clang"
 
-## Jugar
+# 2. Compile the game executable and backend
+ninja -C build_clang neverdead
 
-```bat
-JUGAR_NEVERDEAD.bat
+# 3. Package the distribution release archive
+python tools/package_release.py
 ```
 
-Diagnóstico opcional: `set ND_DIAG=1` antes de lanzar (telemetría `[FRAME]`/`[SWAP]`
-en `build_clang\logs\`). Sin esa variable el binario **no escribe nada** por frame.
+The resulting release package will be generated under `dist/Neverdeth-v0.1.0-alpha-win64.zip`.
 
-## Mapa del proyecto
+---
 
-```
-src/         capa de ports: imports xboxkrnl, present gate, menú F1, pacer, VEH
-config/      hooks midasm / thunks / CRT mapping del codegen
-patches/     parches del SDK que la build asume (fpscr)
-docs/        informes de ingeniería, inventario de CVars, mapa del grafo
-tools/       arnés de benchmark, extractores y scripts de análisis
-generated/   [no incluido] árbol recompilado por el codegen
-```
-
-## Legal
-
-*NeverDead* © Konami. Este repositorio **no contiene ni distribuye** ningún asset, binario
-ni dato original del juego: solo la capa de recompilación, configuración y parches.
-Úsalo únicamente con una copia legítima que poseas.
+## Disclaimer & Acknowledgments
+- **ReXGlue SDK:** Runtime framework, PowerPC execution context, and Direct3D 12 Xenos emulation layer.
+- **Xenia Project:** Foundational research on the Xbox 360 Xenos GPU architecture and kernel structures.
+- **NeverDead:** Developed by Rebellion Developments and published by Konami Digital Entertainment (2012). This project is an independent educational and preservation effort and is not affiliated with, endorsed by, or sponsored by Konami or Rebellion.
