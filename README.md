@@ -1,78 +1,76 @@
-<p align="center">
-  <img src="docs/assets/neverdeth_logo_transparent.png" alt="Neverdeth Logo" width="560">
-</p>
+<div align="center">
+  <img src="docs/assets/neverdeth_logo_transparent.png" alt="Neverdeth" width="420" />
+  <p>
+    <b>English</b> | <a href="README.es.md">Español</a>
+  </p>
+</div>
 
-# Neverdeth
+**Neverdeth** is an unofficial native Windows x64 port of *NeverDead* (Xbox 360, 2012). Conceived as a full AI-assisted **EmuComp** (a hybrid combining static PowerPC-to-C++20 recompilation with a custom Xbox 360 hardware runtime and Direct3D 12 translation layer), it runs the game natively on 64-bit Windows.
 
-An unofficial static recompilation of the Xbox 360 release of NeverDead (2012, Title ID 4B4E081F) to native x64 Windows and Direct3D 12.
-
-> **Note:** This project does not contain any original game assets, proprietary audio/video streams, or copyrighted game code. You must provide your own legally acquired copy of NeverDead (Xbox 360, Title ID 4B4E081F) to extract and play the game.
-
----
+This repository does not contain any original game code or proprietary assets. You must provide your own retail Xbox 360 copy of *NeverDead* (Title ID `4B4E081F`) to extract the game files on first launch.
 
 ## Features
-- **Native x64 Execution:** PowerPC machine code statically lifted and recompiled to native C++20 and optimized x64 machine code via the ReXGlue SDK.
-- **Direct3D 12 Rendering Backend:** Accurate eDRAM emulation using Rasterizer Ordered Views (ROV / Pixel Shader Interlock) for original Xbox 360 lighting, HDR bloom, and post-processing parity.
-- **High Framerate Support:** Rock-solid 30.0 FPS 1:1 frame-paced presentation by default, with dynamic frame-by-frame hysteresis for unlocked 60+ FPS in 3D combat while automatically protecting menus, loading screens, and Bink FMVs at 30 FPS.
-- **Built-in Native Asset Installer:** Autonomous Win32 setup wizard supporting unencrypted Xbox 360 `.iso` disc images (XISO / XGD2 / XGD3), Games on Demand (`.data`) packages, and extracted game folders without any external dependencies.
-- **In-Game Configuration Menu (F10):** Real-time runtime overlay to adjust framerate limits, window modes, and toggle individual Asura Engine render passes (SSAO, Motion Blur, Shadows, Fog, Adaptive Exposure). Settings persist across sessions in `config/settings.ini`.
 
----
+- **Native x64 & Direct3D 12 EmuComp Architecture:** Combines static executable recompilation with low-level XDK/Xenos runtime bridging to run natively on Windows x64 without full virtual machine emulation overhead.
+- **High Framerate Mode:** Runs at the original 30 FPS by default, with an optional unlocked framerate mode for 3D gameplay while preserving native 30 FPS timing in menus and pre-rendered cutscenes.
+- **Real-Time Graphics Menu (`F10`):** Toggle shadows, SSAO, volumetric light shafts, fog, HDR bloom, motion blur, RMLAA, and HUD elements in-game at any time.
+- **Built-In Game Extractor:** Extracts game data directly from unencrypted `.iso` images (XISO/XGD2), Games on Demand (`.data`) containers, or extracted folders on first startup.
 
 ## System Requirements
-- **OS:** Windows 10 (version 20H2+) or Windows 11 (64-bit).
-- **GPU:** DirectX 12 compatible graphics card supporting Rasterizer Ordered Views (ROV):
-  - NVIDIA GeForce GTX 900 series or newer (RTX recommended).
-  - AMD Radeon RX 5000 series or newer.
-  - Intel Arc / Iris Xe or newer.
-- **CPU:** x86-64 processor supporting AVX2 instructions.
-- **Game Copy:** Legally acquired Xbox 360 copy of NeverDead (Title ID `4B4E081F`) in `.iso`, `.data`, or extracted folder format.
 
----
+- **OS:** Windows 10 (64-bit, version 20H2 or newer) or Windows 11
+- **GPU:** Direct3D 12 compatible graphics card (NVIDIA GeForce GTX 900 series+, AMD Radeon RX 5000 series+, or Intel Arc)
+- **Runtime:** [Microsoft Visual C++ 2015–2022 Redistributable (x64)](https://aka.ms/vs/17/release/vc_redist.x64.exe)
+- **Input:** XInput-compatible controller
+- **Game Data:** Unmodified Xbox 360 copy of *NeverDead* (Title ID `4B4E081F`) as an unencrypted `.iso` (XISO/XGD2), a Games on Demand (`.data`) package, or an extracted folder containing `default.xex`
 
-## Installation & Quick Start
+## Setup
 
-1. Download [`Neverdeth-v0.1.0-alpha-win64.zip`](https://github.com/neverdeth/neverdeth/releases) and extract the archive to a clean folder.
-2. Launch `Neverdeth.exe`.
-3. On first startup, the setup wizard will appear. Select your Xbox 360 `.iso` image, `.data` GOD container, or extracted game folder containing `default.xex`.
-4. The game will extract and verify required assets into `assets/` and launch immediately.
-5. Press `F10` during gameplay at any time to open the configuration menu.
+1. Download `Neverdeth-v0.1.0-alpha-win64.zip` from the [Releases](https://github.com/Katzert/Neverdeth/releases) page and extract it to a folder of your choice.
+2. Run `Neverdeth.exe`.
+3. On first launch, select your `.iso` image, `.data` container, or extracted game directory when prompted. Once the game files are unpacked into `assets/`, the game will start automatically.
 
-*Alternatively, you can extract assets manually via CLI:*
-```powershell
-python tools/extract_neverdead_assets.py --input <path_to_game_dump> --output assets
-```
+> **Note:** Raw Redump `.iso` images encrypted with physical disc keys must be decrypted or converted to standard XISO format before importing.
 
----
+## Configuration
+
+Press **F10** at any time while the game is running to open the configuration window, or edit `config/settings.ini` manually:
+
+- **Framerate:** Set `UnlockFramerate=true` (or toggle it in the `F10` menu) to unlock the framerate during 3D gameplay.
+- **Graphics Options:** Individual toggles for shadows, ambient occlusion (SSAO), light shafts, fog, bloom, motion blur, anti-aliasing (RMLAA), and the HUD are saved automatically to `config/settings.ini`.
 
 ## Building from Source
 
 ### Prerequisites
-- Windows 10/11 x64
-- Visual Studio 2022 Build Tools (Desktop development with C++)
-- LLVM / Clang 18+ (`clang++`, `clang`, `llvm-rc`, `lld-link`)
-- CMake 3.25+
-- Ninja 1.11+
+
+- Visual Studio 2022 Build Tools & Windows 10/11 SDK
+- Clang/LLVM 18+
+- CMake 3.24+ & Ninja
 - Python 3.10+
 
 ### Build Steps
 
 ```powershell
-# 1. Configure the build directory with CMake and Clang
-cmake -B build_clang -G Ninja -DCMAKE_CXX_COMPILER="clang++" -DCMAKE_C_COMPILER="clang"
+cmake --preset clang-release
+ninja -C build_clang
+```
 
-# 2. Compile the game executable and backend
-ninja -C build_clang neverdead
+To generate the redistributable archive in `dist/`:
 
-# 3. Package the distribution release archive
+```powershell
 python tools/package_release.py
 ```
 
-The resulting release package will be generated under `dist/Neverdeth-v0.1.0-alpha-win64.zip`.
+## AI-Assisted Development & Credits
 
----
+**Neverdeth** was developed as a fully AI-assisted **EmuComp** project, orchestrating multiple large language and multimodal models across different development environments, reverse engineering workflows, and code auditing stages. The entire project was built using only a **Google AI Pro** subscription, without spending additional money on external API tokens by distributing tasks across free-tier models in various programs:
 
-## Disclaimer & Acknowledgments
-- **ReXGlue SDK:** Runtime framework, PowerPC execution context, and Direct3D 12 Xenos emulation layer.
-- **Xenia Project:** Foundational research on the Xbox 360 Xenos GPU architecture and kernel structures.
-- **NeverDead:** Developed by Rebellion Developments and published by Konami Digital Entertainment (2012). This project is an independent educational and preservation effort and is not affiliated with, endorsed by, or sponsored by Konami or Rebellion.
+- **Primary Architecture, Reverse Engineering & Auditing (via Google AI Pro):** Gemini Argon, Gemini 3.8 Flash
+- **Additional Code Analysis & Reasoning:** Claude Sonnet 4.5
+- **Free-Tier Models (Distributed across development tools at zero cost):** DeepSeek v4.1 Flash, GLM 5.3, GLM 5.3 Flash, Muse Spark 1.3, Nemotron 3.5 Super VL, MiniMax M3.1 Flash
+
+### Toolchain & Acknowledgments
+
+Built with the [ReXGlue SDK](https://github.com/rexglue) static recompilation toolchain, with foundational hardware documentation and research from the [Xenia Project](https://xenia.jp/).
+
+*NeverDead* was developed by Rebellion Developments and published by Konami Digital Entertainment. This project is non-commercial and is not affiliated with or endorsed by Konami Digital Entertainment or Rebellion Developments.

@@ -1,19 +1,27 @@
-# Neverdeth - v0.1.0-alpha
+# Neverdeth v0.1.0-alpha
 
-Initial public alpha release of Neverdeth (static recompilation of NeverDead Xbox 360 to native x64 Windows and Direct3D 12).
+Initial public alpha release of **Neverdeth**, a full AI-assisted **EmuComp** port of *NeverDead* for 64-bit Windows. / Primera versión pública alpha de **Neverdeth**, un port **EmuComp** íntegramente asistido por IA de *NeverDead* para Windows de 64 bits.
 
-### Highlights
-- **Native x64 and Direct3D 12 Execution:** Complete PowerPC binary recompilation running over Direct3D 12 (ROV / Pixel Shader Interlock path) with native HDR bloom and eDRAM emulation.
-- **Dynamic Framerate Hysteresis:** Rock-solid 30.0 FPS 1:1 pacing in menus and Bink videos, with automatic high-framerate unlocked presentation in 3D combat (toggleable in real-time with `F10` or `config/settings.ini`).
-- **Autonomous Setup Wizard:** 100% native Win32 extractor for unencrypted Xbox 360 disc images (`.iso`), Games on Demand (`.data`) packages, and extracted folders without Python or external dependencies.
-- **Asset Junction Compatibility:** Automatic link creation for game subdirectories (`FMV`, `Fonts`, `GUIMenu`, `misc`, `sounds`, `Text`) ensuring seamless media playback across all Windows installations.
-- **In-Game Settings (F10):** Real-time graphics menu to adjust display modes, framerate ceilings, SSAO, Motion Blur, Fog, and Dynamic Exposure.
+---
 
-### Setup Instructions
-1. Extract `Neverdeth-v0.1.0-alpha-win64.zip` into any folder.
-2. Run `Neverdeth.exe`.
-3. Follow the first-time setup prompt to select your legally acquired Xbox 360 copy of NeverDead (Title ID `4B4E081F`).
+## English
 
-### Known Issues
-- **First-Time PSO Compilation:** Entering new 3D zones compiles DirectX 12 pipeline state objects asynchronously. Cached states are preserved in `cache/` for stutter-free subsequent sessions.
-- **Raw Encrypted Redump ISOs:** Disc dumps with raw physical optical encryption must be decrypted to standard XISO format prior to extraction.
+- **Native x64 & Direct3D 12 EmuComp:** Hybrid static recompilation of the Xbox 360 executable and runtime layer running natively on Direct3D 12.
+- **Framerate Options:** Original 30 FPS pacing by default, with an optional unlocked framerate mode for 3D gameplay (`F10` or `config/settings.ini`).
+- **Built-In Extractor:** Unpacks game data directly from unencrypted `.iso` images, Games on Demand (`.data`) containers, or extracted folders on first launch.
+- **In-Game Graphics Menu (`F10`):** Toggle post-processing effects (SSAO, motion blur, bloom, fog, light shafts, shadows, RMLAA, HUD) in real time.
+- **AI Credits:** Built with Gemini Argon and Gemini 3.8 Flash (via Google AI Pro), alongside Claude Sonnet 4.5 and free-tier models distributed across multiple tools (DeepSeek v4.1 Flash, GLM 5.3, GLM 5.3 Flash, Muse Spark 1.3, Nemotron 3.5 Super VL, MiniMax M3.1 Flash).
+
+**Setup:** Extract `Neverdeth-v0.1.0-alpha-win64.zip`, run `Neverdeth.exe`, and select your Xbox 360 copy of *NeverDead* (`4B4E081F`). Requires the [Visual C++ 2015–2022 Redistributable (x64)](https://aka.ms/vs/17/release/vc_redist.x64.exe).
+
+---
+
+## Español
+
+- **EmuComp Nativo x64 y Direct3D 12:** Recompilación estática híbrida del ejecutable de Xbox 360 y capa de runtime corriendo de forma nativa sobre Direct3D 12.
+- **Opciones de Framerate:** 30 FPS originales por defecto, con modo opcional de FPS desbloqueados para el gameplay 3D (`F10` o `config/settings.ini`).
+- **Instalador Integrado:** Extrae los archivos del juego directamente desde imágenes `.iso` desencriptadas, contenedores Games on Demand (`.data`) o carpetas extraídas al iniciar por primera vez.
+- **Menú Gráfico en Vivo (`F10`):** Permite alternar efectos de post-procesado (SSAO, motion blur, bloom, niebla, rayos de luz, sombras, RMLAA, HUD) en tiempo real.
+- **Créditos de IA:** Desarrollado con Gemini Argon y Gemini 3.8 Flash (vía Google AI Pro), junto con Claude Sonnet 4.5 y modelos gratuitos repartidos en distintos programas (DeepSeek v4.1 Flash, GLM 5.3, GLM 5.3 Flash, Muse Spark 1.3, Nemotron 3.5 Super VL, MiniMax M3.1 Flash).
+
+**Instalación:** Descomprime `Neverdeth-v0.1.0-alpha-win64.zip`, ejecuta `Neverdeth.exe` y selecciona tu copia de Xbox 360 de *NeverDead* (`4B4E081F`). Requiere [Visual C++ 2015–2022 Redistributable (x64)](https://aka.ms/vs/17/release/vc_redist.x64.exe).

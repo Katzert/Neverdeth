@@ -20,13 +20,12 @@ ZIP_OUTPUT = os.path.join(DIST_ROOT, f"{PACKAGE_NAME}.zip")
 # Archivos propietarios y de auditoria interna prohibidos en el paquete
 FORBIDDEN_EXTENSIONS = {".xex", ".iso", ".data", ".asrbe", ".bik"}
 FORBIDDEN_NAME_PATTERNS = [
-    "*" + bytes.fromhex("6172676f6e").decode() + "*",
     "*auditoria_*", "*informe_*", "*recap_*", "*dossier*"
 ]
 
 # Palabras prohibidas en archivos de texto publicos (Anti-Echoing)
+# NOTA: 'Gemini Argon' esta explicitamente autorizado en documentacion publica.
 FORBIDDEN_TEXT_TERMS = [
-    bytes.fromhex("4152474f4e").decode(),
     bytes.fromhex("475241464f5f4152474f4e").decode(),
     "Turno v12", "Turno v13",
     "hospital", "bench_ring", "sub_826B", "0x826B8DCC",
@@ -98,6 +97,11 @@ def prepare_staging():
     if os.path.exists(readme):
         shutil.copy2(readme, os.path.join(STAGE_DIR, "README.md"))
         print(f"  [COPIED] README.md")
+
+    readme_es = os.path.join(ROOT, "README.es.md")
+    if os.path.exists(readme_es):
+        shutil.copy2(readme_es, os.path.join(STAGE_DIR, "README.es.md"))
+        print(f"  [COPIED] README.es.md")
 
     os.makedirs(os.path.join(STAGE_DIR, "docs"), exist_ok=True)
     rn = os.path.join(ROOT, "docs", "RELEASE_NOTES_v0.1.0-alpha.md")
