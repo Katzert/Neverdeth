@@ -49,11 +49,13 @@
 // Declaracion anticipada global: NdPresentHook (dentro del namespace anonimo de
 // mas abajo) aplica el pacer, pero NdApplyFramePacer se define despues.
 static void NdApplyFramePacer();
+static void NdNotifyAsuraFpsIntervalChanged();
 
 static std::atomic<bool> g_hospital_reached{false};
 static std::atomic<bool> g_in_3d_gameplay{false};
 static std::atomic<bool> g_unlock_framerate{false};
 static std::atomic<bool>& g_unlock_fps = g_unlock_framerate;
+static std::atomic<uint32_t> g_guest_device_va{0};
 
 bool NdIsIn3dGameplay() {
   return g_in_3d_gameplay.load(std::memory_order_relaxed);
@@ -1354,11 +1356,62 @@ static void NdD3D12PsoWorkerThread() {
       HRESULT hr = g_real_create_graphics_pipeline_state(
           job.device, &job.desc, job.riid, reinterpret_cast<void**>(&compiled_pso));
       if (SUCCEEDED(hr) && compiled_pso) {
-        std::lock_guard<std::mutex> lk(g_d3d12_pso_mtx);
-        g_d3d12_pso_map[job.hash].pso = compiled_pso;
-        g_d3d12_pso_map[job.hash].ready = true;
+        {
+          std::lock_guard<std::mutex> lk(g_d3d12_pso_mtx);
+          g_d3d12_pso_map[job.hash].pso = compiled_pso;
+          g_d3d12_pso_map[job.hash].ready = true;
+        }
       }
     }
+  }
+}
+
+static void NdPersistCompiledPso(uint64_t pso_hash, const D3D12_GRAPHICS_PIPELINE_STATE_DESC* pDesc) {
+  if (!pDesc) return;
+  static std::mutex s_persist_mtx;
+  std::lock_guard<std::mutex> lk(s_persist_mtx);
+  static std::unordered_set<uint64_t> s_persisted_psos;
+  if (!s_persisted_psos.insert(pso_hash).second) return;
+
+  std::error_code ec;
+  std::filesystem::path cat_path = "cache/shader_catalog.bin";
+  std::filesystem::path pso_path = "cache/d3d12_pipeline_cache.bin";
+
+  uint64_t vs_hash = 0;
+  if (pDesc->VS.pShaderBytecode && pDesc->VS.BytecodeLength) {
+    vs_hash = NdFnv1a64(pDesc->VS.pShaderBytecode, pDesc->VS.BytecodeLength);
+    std::ofstream cat_out(cat_path, std::ios::binary | std::ios::app);
+    if (cat_out.is_open()) {
+      uint32_t stage = 1;
+      uint32_t sz = static_cast<uint32_t>(pDesc->VS.BytecodeLength);
+      cat_out.write(reinterpret_cast<const char*>(&vs_hash), sizeof(vs_hash));
+      cat_out.write(reinterpret_cast<const char*>(&stage), sizeof(stage));
+      cat_out.write(reinterpret_cast<const char*>(&sz), sizeof(sz));
+      cat_out.write(reinterpret_cast<const char*>(pDesc->VS.pShaderBytecode), sz);
+    }
+  }
+
+  uint64_t ps_hash = 0;
+  if (pDesc->PS.pShaderBytecode && pDesc->PS.BytecodeLength) {
+    ps_hash = NdFnv1a64(pDesc->PS.pShaderBytecode, pDesc->PS.BytecodeLength);
+    std::ofstream cat_out(cat_path, std::ios::binary | std::ios::app);
+    if (cat_out.is_open()) {
+      uint32_t stage = 2;
+      uint32_t sz = static_cast<uint32_t>(pDesc->PS.BytecodeLength);
+      cat_out.write(reinterpret_cast<const char*>(&ps_hash), sizeof(ps_hash));
+      cat_out.write(reinterpret_cast<const char*>(&stage), sizeof(stage));
+      cat_out.write(reinterpret_cast<const char*>(&sz), sizeof(sz));
+      cat_out.write(reinterpret_cast<const char*>(pDesc->PS.pShaderBytecode), sz);
+    }
+  }
+
+  std::ofstream pso_out(pso_path, std::ios::binary | std::ios::app);
+  if (pso_out.is_open()) {
+    uint32_t flags = 1;
+    pso_out.write(reinterpret_cast<const char*>(&pso_hash), sizeof(pso_hash));
+    pso_out.write(reinterpret_cast<const char*>(&vs_hash), sizeof(vs_hash));
+    pso_out.write(reinterpret_cast<const char*>(&ps_hash), sizeof(ps_hash));
+    pso_out.write(reinterpret_cast<const char*>(&flags), sizeof(flags));
   }
 }
 
@@ -1433,11 +1486,14 @@ extern "C" HRESULT STDMETHODCALLTYPE NdCreateGraphicsPipelineStateDetour(
 
   HRESULT hr = g_real_create_graphics_pipeline_state(This, pDesc, riid, ppPipelineState);
   if (SUCCEEDED(hr) && *ppPipelineState) {
-    std::lock_guard<std::mutex> lk(g_d3d12_pso_mtx);
-    auto* pso = reinterpret_cast<ID3D12PipelineState*>(*ppPipelineState);
-    pso->AddRef();
-    g_d3d12_pso_map[hash].pso = pso;
-    g_d3d12_pso_map[hash].ready = true;
+    {
+      std::lock_guard<std::mutex> lk(g_d3d12_pso_mtx);
+      auto* pso = reinterpret_cast<ID3D12PipelineState*>(*ppPipelineState);
+      pso->AddRef();
+      g_d3d12_pso_map[hash].pso = pso;
+      g_d3d12_pso_map[hash].ready = true;
+    }
+    NdPersistCompiledPso(hash, pDesc);
   }
   return hr;
 }
@@ -2111,6 +2167,12 @@ static void NdRingProbe(uint32_t device, uint64_t swap_index) {
       REXLOG_INFO("neverdead: [AUTO-NAV] *** HOSPITAL 3D ALCANZADO (draws={} resolves={}) -> Auto-navegacion desactivada ***",
                   draws, resolves);
     }
+    if (!g_in_3d_gameplay.load(std::memory_order_relaxed)) {
+      g_in_3d_gameplay.store(true, std::memory_order_relaxed);
+      REXLOG_INFO("neverdead: [3D-GAMEPLAY] Activado (draws={} resolves={}) -> Framerate desbloqueado en vivo",
+                  draws, resolves);
+      NdNotifyAsuraFpsIntervalChanged();
+    }
   }
 
   if (should_trace_resolves && resolves >= 10) {
@@ -2142,6 +2204,7 @@ static void NdRingProbe(uint32_t device, uint64_t swap_index) {
 }
 
 void NdVdSwapHook(PPCRegister& r31) {
+  g_guest_device_va.store(r31.u32, std::memory_order_relaxed);
   const uint64_t n = g_vd_swap_calls.fetch_add(1, std::memory_order_relaxed) + 1;
 
   // Deteccion desacoplada y dinamica de Gameplay 3D con filtro de histeresis
@@ -2149,23 +2212,22 @@ void NdVdSwapHook(PPCRegister& r31) {
   static uint32_t s_high_draw_streak = 0;
   static uint32_t s_low_draw_streak = 0;
 
-  if (guest_draws >= 250) {
+  if (guest_draws >= 250 || g_hospital_reached.load(std::memory_order_relaxed)) {
     s_low_draw_streak = 0;
-    if (++s_high_draw_streak >= 3) {
-      if (!g_in_3d_gameplay.load(std::memory_order_relaxed)) {
-        g_in_3d_gameplay.store(true, std::memory_order_relaxed);
-        g_hospital_reached.store(true, std::memory_order_relaxed);
-        REXLOG_INFO("neverdead: [3D-GAMEPLAY] Activado (draws={} streak={}) -> Framerate desbloqueado en vivo",
-                    guest_draws, s_high_draw_streak);
-      }
+    if (!g_in_3d_gameplay.load(std::memory_order_relaxed)) {
+      g_in_3d_gameplay.store(true, std::memory_order_relaxed);
+      REXLOG_INFO("neverdead: [3D-GAMEPLAY] Activado (draws={} hospital={}) -> Framerate desbloqueado en vivo",
+                  guest_draws, g_hospital_reached.load());
+      NdNotifyAsuraFpsIntervalChanged();
     }
-  } else if (guest_draws < 150) {
+  } else if (guest_draws < 150 && !g_hospital_reached.load(std::memory_order_relaxed)) {
     s_high_draw_streak = 0;
     if (++s_low_draw_streak >= 2) {
       if (g_in_3d_gameplay.load(std::memory_order_relaxed)) {
         g_in_3d_gameplay.store(false, std::memory_order_relaxed);
         REXLOG_INFO("neverdead: [3D-GAMEPLAY] Desactivado (draws={} streak={}) -> Restaurado pacer 30 FPS en Menu/FMV",
                     guest_draws, s_low_draw_streak);
+        NdNotifyAsuraFpsIntervalChanged();
       }
     }
   } else {
@@ -2464,10 +2526,11 @@ static void NdPaceGuestAfterSwapComplete(float target_fps, uint64_t swap_count) 
   g_completed_swap_seq.fetch_add(1, std::memory_order_release);
   NdWakeAddress(reinterpret_cast<void*>(&g_completed_swap_seq));
 
-  // No frenar si los FPS estan desbloqueados, durante los primeros 120 swaps o si target_fps <= 0
-  if (NdIsFpsUnlocked() || swap_count <= 120 || target_fps <= 0.0f) {
+  // No frenar si target_fps <= 0 (Ilimitado) o en los primeros 120 swaps
+  if (swap_count <= 120 || target_fps <= 0.0f) {
     g_guest_throttle_active.store(false, std::memory_order_release);
     QueryPerformanceCounter(&g_last_guest_swap_qpc);
+    QueryPerformanceCounter(&g_guest_frame_start_qpc);
     return;
   }
 
@@ -2499,14 +2562,20 @@ void NdVdSwapPostHook(PPCRegister& r31) {
   (void)r31;
   const uint64_t swap_count = g_vd_swap_calls.load(std::memory_order_relaxed);
 
-  // Si los FPS estan desbloqueados en gameplay (NdIsFpsUnlocked() == true tras alcanzar el hospital),
-  // target_fps es 0.0f para liberar el techo.
-  // Durante menus y carga (!g_hospital_reached), SIEMPRE se mantiene 30 FPS para evitar
-  // desincronizacion y colapso del ring buffer.
   float target_fps = g_fps_target.load(std::memory_order_relaxed);
-  if (NdIsFpsUnlocked()) {
-    target_fps = 0.0f;
+
+  if (!g_in_3d_gameplay.load(std::memory_order_relaxed)) {
+    // Fuera de 3D (menus, FMVs, carga): SIEMPRE 30 FPS estricto para proteger decodificadores e hilos
+    target_fps = 30.0f;
+  } else if (!g_unlock_fps.load(std::memory_order_relaxed)) {
+    // Usuario selecciono 30 FPS en el menu F10
+    target_fps = 30.0f;
+  } else {
+    // En 3D gameplay con framerate desbloqueado:
+    // Si target_fps == 60.0f -> pacing a 16.666 ms (60 FPS)
+    // Si target_fps <= 0.0f -> 0.0f (sin pacing, ilimitado)
   }
+
   NdPaceGuestAfterSwapComplete(target_fps, swap_count);
 }
 
@@ -2616,40 +2685,38 @@ struct NdRenderToggle {
   int id;
   uint32_t va;   // byte principal en .data del invitado
   uint32_t va2;  // flag companero (Sombras -> CSM), 0 si no aplica
+  bool inverted; // true = 0 activo en motor Asura, 1 inactivo (Sombras Dinamicas)
 };
 
 // Orden = layout: 0..4 columna izquierda, 5..9 columna derecha.
 static const NdRenderToggle kToggles[] = {
-    {L"Sombras Dinámicas", L"DynamicShadows", IDC_CFG_CHK_SHADOW, 0x828E1FB7, 0x828E1FC5},
-    {L"Oclusión Ambiental (SSAO)", L"AmbientOcclusionSSAO", IDC_CFG_CHK_SSAO, 0x828E1FC7, 0},
-    {L"Motion Blur", L"MotionBlur", IDC_CFG_CHK_MBLUR, 0x82801CEF, 0},
-    {L"Bloom HDR", L"BloomHDR", IDC_CFG_CHK_BLOOM, 0x828E1FC6, 0},
-    {L"God Rays (Light Shafts)", L"LightShafts", IDC_CFG_CHK_LIGHTSHAFTS, 0x828E1FBF, 0},
-    {L"Niebla Volumétrica", L"VolumetricFog", IDC_CFG_CHK_FOG, 0x828E1FC0, 0},
-    {L"Post-Procesado (FSFX)", L"PostProcessingFSFX", IDC_CFG_CHK_FSFX, 0x828E1FC1, 0},
-    {L"Partículas (PFX)", L"ParticlesPFX", IDC_CFG_CHK_PFX, 0x828E1FBD, 0},
-    {L"Antialiasing (RMLAA)", L"AntialiasingRMLAA", IDC_CFG_CHK_RMLAA, 0x828E1FC9, 0},
-    {L"Mostrar HUD", L"ShowHUD", IDC_CFG_CHK_HUD, 0x828E1FC3, 0},
+    {L"Sombras Dinámicas", L"DynamicShadows", IDC_CFG_CHK_SHADOW, 0x828E1FB7, 0x828E1FC5, true},
+    {L"Oclusión Ambiental (SSAO)", L"AmbientOcclusionSSAO", IDC_CFG_CHK_SSAO, 0x828E1FC7, 0, false},
+    {L"Motion Blur", L"MotionBlur", IDC_CFG_CHK_MBLUR, 0x82801CEF, 0, false},
+    {L"Bloom HDR", L"BloomHDR", IDC_CFG_CHK_BLOOM, 0x828E1FC6, 0, false},
+    {L"God Rays (Light Shafts)", L"LightShafts", IDC_CFG_CHK_LIGHTSHAFTS, 0x828E1FBF, 0, false},
+    {L"Niebla Volumétrica", L"VolumetricFog", IDC_CFG_CHK_FOG, 0x828E1FC0, 0, false},
+    {L"Post-Procesado (FSFX)", L"PostProcessingFSFX", IDC_CFG_CHK_FSFX, 0x828E1FC1, 0, false},
+    {L"Partículas (PFX)", L"ParticlesPFX", IDC_CFG_CHK_PFX, 0x828E1FC8, 0, false},
+    {L"Antialiasing (RMLAA)", L"AntialiasingRMLAA", IDC_CFG_CHK_RMLAA, 0x828E1FC9, 0, false},
+    {L"Mostrar HUD", L"ShowHUD", IDC_CFG_CHK_HUD, 0x828E1FC3, 0, false},
 };
 
-// 16 flags que tocan los presets (9 efectos + CSM + 6 de overdraw). El HUD va aparte.
+// Flags normales para presets (las sombras se gestionan de forma invertida aparte)
 static const uint32_t kPresetFlags[] = {
-    0x828E1FB7,  // Shadows
-    0x828E1FC5,  // CSM
     0x82801CEF,  // MotionBlur
     0x828E1FC7,  // SSAO
     0x828E1FC6,  // HDRbloom
     0x828E1FBF,  // LightShafts
     0x828E1FC0,  // Fog
     0x828E1FC1,  // FSFX
-    0x828E1FBD,  // PFX
     0x828E1FC9,  // RMLAA
     0x828E1FB9,  // Decals
     0x828E1FBA,  // ObjectDecals
     0x828E1FBB,  // Photons
     0x828E1FBC,  // Projectors
     0x828E1FBE,  // Coronas
-    0x828E1FC8,  // Weather
+    0x828E1FC8,  // Weather / Particulas
 };
 static constexpr uint32_t kHudVa = 0x828E1FC3;
 
@@ -2703,9 +2770,9 @@ static void NdDisableTheme(HWND ctrl) {
 
 static bool NdToggleValue(const NdRenderToggle& t) {
   if (g_translate == nullptr) return true;
-  const bool on = read_guest_u8(t.va) != 0;
-  if (t.va2 == 0) return on;
-  return on && read_guest_u8(t.va2) != 0;
+  bool raw = read_guest_u8(t.va) != 0;
+  if (t.va2 != 0) raw = raw && (read_guest_u8(t.va2) != 0);
+  return t.inverted ? !raw : raw;
 }
 
 static int s_window_mode = 0;
@@ -2735,27 +2802,45 @@ void NdLoadSettingsFromIni() {
 
   GetPrivateProfileStringW(L"Graphics", L"UnlockFramerate", L"false", buf, 64, ini.c_str());
   bool unlock = (_wcsicmp(buf, L"true") == 0 || wcstol(buf, nullptr, 10) == 1);
-  g_unlock_fps.store(unlock, std::memory_order_relaxed);
 
   GetPrivateProfileStringW(L"Graphics", L"AdaptiveExposureOptimization", L"true", buf, 64, ini.c_str());
   bool luma_opt = (_wcsicmp(buf, L"false") != 0 && _wcsicmp(buf, L"0") != 0);
   g_opt_luma_resolve.store(luma_opt, std::memory_order_relaxed);
 
   int fps = GetPrivateProfileIntW(L"Graphics", L"TargetFPS", 30, ini.c_str());
-  if (unlock) {
-    g_fps_target.store(0.0f, std::memory_order_relaxed);
-  } else {
-    g_fps_target.store(static_cast<float>(fps), std::memory_order_relaxed);
+  float target = static_cast<float>(fps);
+
+  // Sobrescritura por variables de entorno si estan presentes
+  const char* env_unlock = std::getenv("ND_UNLOCK_FPS");
+  if (env_unlock != nullptr && env_unlock[0] == '1') {
+    unlock = true;
+    target = 0.0f;
   }
+  const char* env_fps = std::getenv("ND_FPS_LIMIT");
+  if (env_fps != nullptr) {
+    const float v = static_cast<float>(std::atof(env_fps));
+    if (v > 0.0f && v <= 1000.0f) {
+      target = v;
+      if (v > 30.0f) {
+        unlock = true;
+      }
+    }
+  }
+
+  g_unlock_fps.store(unlock, std::memory_order_relaxed);
+  g_fps_target.store(target, std::memory_order_relaxed);
 
   s_window_mode = GetPrivateProfileIntW(L"Graphics", L"WindowMode", 0, ini.c_str());
 
   for (const auto& t : kToggles) {
     GetPrivateProfileStringW(L"Graphics", t.ini_key, L"true", buf, 64, ini.c_str());
     bool val = (_wcsicmp(buf, L"false") != 0 && _wcsicmp(buf, L"0") != 0);
-    write_guest_u8(t.va, val ? 1 : 0);
-    if (t.va2 != 0) write_guest_u8(t.va2, val ? 1 : 0);
+    const uint8_t byte_val = (t.inverted ? !val : val) ? 1 : 0;
+    write_guest_u8(t.va, byte_val);
+    if (t.va2 != 0) write_guest_u8(t.va2, byte_val);
   }
+  // Bloquear de forma permanente e inviolable 0x828E1FBD a 1 para preservar el pase de sombras
+  write_guest_u8(0x828E1FBD, 1);
 }
 
 void NdSaveSettingsToIni() {
@@ -2796,8 +2881,17 @@ static void NdSyncCheckboxesFromMemory(HWND hwnd) {
 }
 
 static void NdApplyPreset(HWND hwnd, bool high_quality) {
-  const uint8_t val = high_quality ? 1 : 0;
   int written = 0;
+  // Sombras Dinamicas (logica invertida: 0 = activo en motor, 1 = desactivado)
+  const uint8_t shadow_val = high_quality ? 0 : 1;
+  if (write_guest_u8(0x828E1FB7, shadow_val)) ++written;
+  if (write_guest_u8(0x828E1FC5, shadow_val)) ++written;
+
+  // Render pass stage 2 protector (SIEMPRE 1)
+  write_guest_u8(0x828E1FBD, 1);
+
+  // Flags normales (1 = encendido, 0 = apagado)
+  const uint8_t val = high_quality ? 1 : 0;
   for (uint32_t va : kPresetFlags) {
     if (write_guest_u8(va, val)) ++written;
   }
@@ -2805,8 +2899,8 @@ static void NdApplyPreset(HWND hwnd, bool high_quality) {
   NdSyncCheckboxesFromMemory(hwnd);
   NdSaveSettingsToIni();
   if (NdIsDiagEnabled()) {
-    REXLOG_INFO("neverdead: [CONFIG-UI] Perfil '{}': {} flags = {} (HUD ON)",
-                high_quality ? "Calidad Original" : "Bajo Consumo", written, val);
+    REXLOG_INFO("neverdead: [CONFIG-UI] Perfil '{}': {} flags aplicados (Sombras={}, Resto={}, HUD ON)",
+                high_quality ? "Calidad Original" : "Bajo Consumo", written, shadow_val, val);
   }
 }
 
@@ -3118,28 +3212,40 @@ static LRESULT CALLBACK NdConfigWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPAR
         const bool on = SendMessageW(reinterpret_cast<HWND>(lParam), BM_GETCHECK, 0, 0) == BST_CHECKED;
         g_unlock_fps.store(on, std::memory_order_relaxed);
         if (on) {
-          g_fps_target.store(0.0f, std::memory_order_relaxed);
+          float cur = g_fps_target.load(std::memory_order_relaxed);
+          if (cur == 30.0f) {
+            g_fps_target.store(60.0f, std::memory_order_relaxed);
+          }
         } else {
           g_fps_target.store(30.0f, std::memory_order_relaxed);
         }
         HWND cb = GetDlgItem(hwnd, IDC_CFG_COMBO_FPS);
-        if (cb) SendMessageW(cb, CB_SETCURSEL, on ? 0 : 2, 0);
+        if (cb) {
+          float t = g_fps_target.load(std::memory_order_relaxed);
+          int sel = (t == 60.0f) ? 1 : (t <= 0.0f && on ? 0 : 2);
+          SendMessageW(cb, CB_SETCURSEL, sel, 0);
+        }
+        write_guest_be32(0x82B31FBC, float_to_be_bits(0.0f));
+        NdNotifyAsuraFpsIntervalChanged();
         NdSaveSettingsToIni();
         return 0;
       }
       if (id == IDC_CFG_COMBO_FPS && code == CBN_SELCHANGE) {
         HWND cb = reinterpret_cast<HWND>(lParam);
         const int idx = static_cast<int>(SendMessageW(cb, CB_GETCURSEL, 0, 0));
+        // idx 0 = Ilimitado, idx 1 = 60 FPS, idx 2 = 30 FPS
         const float target = (idx == 1) ? 60.0f : (idx == 2) ? 30.0f : 0.0f;
+        const bool unlock = (idx != 2);
         g_fps_target.store(target, std::memory_order_relaxed);
-        g_unlock_fps.store(idx == 0, std::memory_order_relaxed);
+        g_unlock_fps.store(unlock, std::memory_order_relaxed);
         HWND chkUnlock = GetDlgItem(hwnd, IDC_CFG_CHK_UNLOCK_FPS);
-        if (chkUnlock) SendMessageW(chkUnlock, BM_SETCHECK, (idx == 0) ? BST_CHECKED : BST_UNCHECKED, 0);
+        if (chkUnlock) SendMessageW(chkUnlock, BM_SETCHECK, unlock ? BST_CHECKED : BST_UNCHECKED, 0);
         write_guest_be32(0x82B31FBC, float_to_be_bits(0.0f));
+        NdNotifyAsuraFpsIntervalChanged();
         NdSaveSettingsToIni();
         if (NdIsDiagEnabled()) {
-          REXLOG_INFO("neverdead: [CONFIG-UI] Limite de framerate: {:.1f} FPS (pacer host)",
-                      target);
+          REXLOG_INFO("neverdead: [CONFIG-UI] Limite de framerate: {:.1f} FPS (idx={}, unlock={})",
+                      target, idx, unlock);
         }
         return 0;
       }
@@ -3148,17 +3254,19 @@ static LRESULT CALLBACK NdConfigWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPAR
         NdApplyWindowMode(static_cast<int>(SendMessageW(cb, CB_GETCURSEL, 0, 0)));
         return 0;
       }
-      // Casillas: logica positiva (marcada = efecto encendido).
+      // Casillas con soporte de polaridad booleana normal e invertida
       for (const auto& t : kToggles) {
         if (id == t.id && code == BN_CLICKED) {
           const bool on =
               SendMessageW(reinterpret_cast<HWND>(lParam), BM_GETCHECK, 0, 0) == BST_CHECKED;
-          write_guest_u8(t.va, on ? 1 : 0);
-          if (t.va2 != 0) write_guest_u8(t.va2, on ? 1 : 0);
+          const uint8_t byte_val = (t.inverted ? !on : on) ? 1 : 0;
+          write_guest_u8(t.va, byte_val);
+          if (t.va2 != 0) write_guest_u8(t.va2, byte_val);
+          write_guest_u8(0x828E1FBD, 1);
           NdSaveSettingsToIni();
           if (NdIsDiagEnabled()) {
-            REXLOG_INFO("neverdead: [CONFIG-UI] toggle id={} (va=0x{:08X}) = {}", t.id, t.va,
-                        on ? 1 : 0);
+            REXLOG_INFO("neverdead: [CONFIG-UI] toggle id={} (va=0x{:08X}) = {} (byte=0x{:02X})",
+                        t.id, t.va, on ? 1 : 0, byte_val);
           }
           return 0;
         }
@@ -3273,26 +3381,60 @@ static void NdSyncFpsClampMemory(float target) {
   }
 }
 
+static void NdNotifyAsuraFpsIntervalChanged() {
+  uint32_t dev = g_guest_device_va.load(std::memory_order_relaxed);
+  if (dev == 0) return;
+
+  float target = g_fps_target.load(std::memory_order_relaxed);
+  bool in_3d = g_in_3d_gameplay.load(std::memory_order_relaxed);
+  bool unlocked = g_unlock_fps.load(std::memory_order_relaxed) && in_3d;
+
+  uint32_t interval = 2; // 30 FPS
+  if (unlocked) {
+    if (target <= 0.0f) {
+      interval = 0; // Ilimitado
+    } else if (target > 35.0f) {
+      interval = 1; // 60 FPS
+    }
+  }
+
+  // 14000(dev) guarda el intervalo deseado (0, 1 o 2) para sub_826B78D8
+  write_guest_be32(dev + 14000, interval);
+  // Al escribir 0 en 24584(dev), sub_826BE8C0 (hilo de renderizado) invocara
+  // forzosamente sub_826B78D8 en el proximo frame para reconfigurar el registro
+  // 0x57C de presentacion PM4 en la GPU.
+  write_guest_be32(dev + 24584, 0);
+
+  if (NdIsDiagEnabled()) {
+    REXLOG_INFO("neverdead: [FPS-SYNC] Device=0x{:08X} -> interval={} (target={:.1f}, 3d={}, unlock={}) forzado en sub_826BE8C0",
+                dev, interval, target, in_3d, unlocked);
+  }
+}
+
 static void NdInitFpsMode() {
   if (g_fps_mode_initialized.exchange(true)) {
     return;
   }
   NdLoadSettingsFromIni();
   float target = g_fps_target.load(std::memory_order_relaxed);
-  const char* env = std::getenv("ND_FPS_LIMIT");
-  if (env != nullptr) {
-    const float v = static_cast<float>(std::atof(env));
-    if (v > 0.0f && v <= 1000.0f) {
-      target = v;
-    }
-  }
   const char* env_unlock = std::getenv("ND_UNLOCK_FPS");
   if (env_unlock != nullptr && env_unlock[0] == '1') {
     g_unlock_fps.store(true, std::memory_order_relaxed);
     target = 0.0f;
   }
+  const char* env = std::getenv("ND_FPS_LIMIT");
+  if (env != nullptr) {
+    const float v = static_cast<float>(std::atof(env));
+    if (v > 0.0f && v <= 1000.0f) {
+      target = v;
+      if (v > 30.0f) {
+        g_unlock_fps.store(true, std::memory_order_relaxed);
+      }
+    }
+  }
   g_fps_target.store(target, std::memory_order_relaxed);
   NdSyncFpsClampMemory(target);
+  NdNotifyAsuraFpsIntervalChanged();
   REXLOG_INFO("neverdead: [FPS] Inicializado a {:.1f} FPS (0.0 = desbloqueado, unlock={})",
               target, g_unlock_fps.load());
 }
@@ -3308,6 +3450,7 @@ static void NdCheckFpsToggleKey() {
     float next = next_unlock ? 0.0f : 30.0f;
     g_fps_target.store(next, std::memory_order_relaxed);
     NdSyncFpsClampMemory(next);
+    NdNotifyAsuraFpsIntervalChanged();
     NdSaveSettingsToIni();
     REXLOG_INFO("neverdead: [FPS-TOGGLE] *** F8 PULSADO: Modo alternado a {} (0x82B31FBC sincronizado) ***",
                 next_unlock ? "Desbloqueado (72+ FPS / 0.0f)" : "30 FPS (30.0f)");
@@ -3318,13 +3461,33 @@ static void NdCheckFpsToggleKey() {
 
 void NdForceIntervalOneHook(PPCRegister& r11) {
   NdInitFpsMode();
-  r11.u64 = 0;
+  float target = g_fps_target.load(std::memory_order_relaxed);
+  bool in_3d = g_in_3d_gameplay.load(std::memory_order_relaxed);
+  bool unlocked = g_unlock_fps.load(std::memory_order_relaxed) && in_3d;
+
+  if (!unlocked || target == 30.0f) {
+    r11.u64 = 2; // 30 FPS -> intervalo 2 VBlanks (33.33 ms)
+  } else if (target <= 0.0f) {
+    r11.u64 = 0; // Ilimitado -> intervalo 0 VBlanks (flip inmediato)
+  } else {
+    // 60 FPS -> intervalo 1 VBlank (16.67 ms) que previene la perdida de lock del hilo VBlank
+    r11.u64 = 1;
+  }
   NdSyncFpsClampMemory(0.0f);
 }
 
 void NdAdjustRenderTimeoutHook(PPCRegister& r11) {
   const float target = g_fps_target.load(std::memory_order_relaxed);
-  r11.s64 = (target > 0.0f && target <= 35.0f) ? -333333 : -250000;
+  bool in_3d = g_in_3d_gameplay.load(std::memory_order_relaxed);
+  bool unlocked = g_unlock_fps.load(std::memory_order_relaxed) && in_3d;
+
+  if (!unlocked || target == 30.0f) {
+    r11.s64 = -333333; // 33.33 ms (30 FPS)
+  } else if (target <= 0.0f) {
+    r11.s64 = -10000;  // 1.0 ms (Ilimitado)
+  } else {
+    r11.s64 = -166667; // 16.67 ms (60 FPS)
+  }
 }
 
 void NdSetFpsLimitHook(PPCRegister& f0) {
@@ -3350,39 +3513,46 @@ void NdAutoAdvanceInput(PPCContext& ctx, uint8_t* base, uint32_t guest_state) {
     }
     return false;
   }();
-  if (!s_enabled) return;
 
   static const auto s_t0 = std::chrono::steady_clock::now();
   const auto now = std::chrono::steady_clock::now();
   const auto elapsed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(now - s_t0).count();
 
-  // Ciclo continuo de pulsos: cada 1200 ms (1.2 s) un pulso de 400 ms
-  // USER REQUIREMENT: "Debes primero apretar start y luego a y a y a para llegar al escenario 3d"
-  const uint64_t cycle_ms = 1200;
-  const uint64_t phase = elapsed_ms % cycle_ms;
-  const bool button_down = (phase < 400);
-
   uint16_t inject_btn = 0;
   const char* btn_name = "NONE";
 
-  if (button_down) {
-    if (elapsed_ms < 16000) {
-      // Hasta los 16s: pulsar START repetidamente para cruzar la pantalla de titulo
-      inject_btn = 0x0010; // XINPUT_GAMEPAD_START
-      btn_name = "START";
-    } else {
-      // Despues de los 16s: pulsar A continuamente cada 1.2s para cruzar Campaña, Dificultad,
-      // Confirmar partida y saltar cinemática hasta entrar al pasillo 3D del hospital
-      inject_btn = 0x1000; // XINPUT_GAMEPAD_A
-      btn_name = "A";
+  // Saltar CESA.bik inmediatamente en el arranque (< 2.5s) incluso si ND_AUTO_NAV no esta activo
+  static std::atomic<bool> s_startup_cesa_skipped{false};
+  if (!s_startup_cesa_skipped.load(std::memory_order_relaxed) && elapsed_ms < 2500) {
+    inject_btn = 0x0010; // XINPUT_GAMEPAD_START
+    btn_name = "START (CESA SKIP)";
+    if (elapsed_ms > 400) {
+      s_startup_cesa_skipped.store(true, std::memory_order_relaxed);
+    }
+  } else if (!s_enabled) {
+    return;
+  } else {
+    // Si ND_AUTO_NAV esta activo, continuar la navegacion automatica al 3D:
+    const uint64_t cycle_ms = 1200;
+    const uint64_t phase = elapsed_ms % cycle_ms;
+    const bool button_down = (phase < 400);
+
+    if (button_down) {
+      if (elapsed_ms < 16000) {
+        inject_btn = 0x0010; // XINPUT_GAMEPAD_START
+        btn_name = "START";
+      } else {
+        inject_btn = 0x1000; // XINPUT_GAMEPAD_A
+        btn_name = "A";
+      }
     }
   }
 
   static bool s_was_down = false;
-  if (button_down && !s_was_down) {
+  if (inject_btn != 0 && !s_was_down) {
     s_was_down = true;
     REXLOG_INFO("neverdead: [AUTO-NAV] t={:.1f}s -> Pulsando {}", elapsed_ms / 1000.0, btn_name);
-  } else if (!button_down && s_was_down) {
+  } else if (inject_btn == 0 && s_was_down) {
     s_was_down = false;
   }
 

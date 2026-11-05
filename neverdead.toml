@@ -20,6 +20,8 @@ draw_resolution_scale_y = 1
 
 vsync = false
 video_mode_refresh_rate = 60.0
+vblank_lock = true
+max_fps = 0
 d3d12_allow_variable_refresh_rate_and_tearing = true
 
 async_shader_compilation = true
