@@ -734,20 +734,15 @@ extern "C" bool NdCheckShouldPaintUI(void* presenter, bool force_paint) {
   // BLINDAJE: paint_mode_ DEBE ser 2 (presenta el hilo del invitado). Cualquier
   // otro valor deja al juego a ~0.1 FPS, asi que se corrige en la entrada.
   nd_restore_paint_mode();
-  if (force_paint) {
-    g_force_paint_requested.store(true, std::memory_order_release);
-    return true;
-  }
   const uint64_t swaps = g_vd_swap_calls.load(std::memory_order_acquire);
   if (swaps > 0) {
-    return false; // Con host_present_from_non_ui_thread = true, el hilo UI nunca pinta frames del juego
+    // Con host_present_from_non_ui_thread = true y sin menus ImGui nativos en rexruntime,
+    // el hilo UI NUNCA debe pintar ni adquirir el lock del Presenter 34 veces por segundo.
+    return false;
   }
-  return true; // swaps == 0 (permite pintar la ventana antes del primer swap de juego)
+  return force_paint;
 }
 extern "C" bool NdCheckShouldPaintAndPresent() {
-  if (g_force_paint_requested.exchange(false, std::memory_order_acq_rel)) {
-    return true;
-  }
   const uint64_t swaps = g_vd_swap_calls.load(std::memory_order_acquire);
   if (swaps == 0) {
     return true;
@@ -1114,15 +1109,15 @@ void NdHookSwapChainVtable(IDXGISwapChain* swap_chain) {
 }
 static HWND g_game_hwnd = nullptr;
 static HWND g_config_hwnd = nullptr;
-// Peticion de toggle del menu F1: la ventana del juego solo la marca; el timer
+// Peticion de toggle del menu F10: la ventana del juego solo la marca; el timer
 // de 16 ms de la ventana del menu es el unico que ejecuta el toggle, asi no se
 // puede togglear dos veces cuando el foco esta en el juego.
 static std::atomic<bool> g_menu_toggle_request{false};
 static WNDPROC g_original_game_wndproc = nullptr;
 
 LRESULT CALLBACK NdGameSubclassWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
-  if ((msg == WM_KEYDOWN || msg == WM_SYSKEYDOWN) && (wParam == VK_F10 || wParam == VK_F1)) {
-    // Interceptar F10 / F1 y evitar menu de sistema en F10
+  if ((msg == WM_KEYDOWN || msg == WM_SYSKEYDOWN) && wParam == VK_F10) {
+    // Interceptar F10 y evitar menu de sistema en F10
     if (g_config_hwnd == nullptr || !IsWindow(g_config_hwnd)) {
       NdOpenConfigUI();
     } else {
@@ -1165,7 +1160,7 @@ static HWND NdGetGameWindow() {
     if (hwnd == d->console || hwnd == d->config) {
       return TRUE;
     }
-    // Nunca subclassar la ventana del menu F1 ni ninguna de su clase: si se
+    // Nunca subclassar la ventana del menu F10 ni ninguna de su clase: si se
     // engancha el dialogo, los cambios de modo de ventana se aplican a el.
     if (d->config != nullptr && hwnd == d->config) {
       return TRUE;
@@ -1207,7 +1202,7 @@ extern "C" HRESULT STDMETHODCALLTYPE NdCreateSwapChainForHwndDetour(
     g_game_hwnd = hwnd;
     g_original_game_wndproc = reinterpret_cast<WNDPROC>(
         SetWindowLongPtrW(hwnd, GWLP_WNDPROC, reinterpret_cast<LONG_PTR>(&NdGameSubclassWndProc)));
-    REXLOG_INFO("neverdead: [WINDOW] HWND={:p} subclassed para interceptar F1 y WM_CLOSE limpia",
+    REXLOG_INFO("neverdead: [WINDOW] HWND={:p} subclassed para interceptar F10 y WM_CLOSE limpia",
                 static_cast<void*>(hwnd));
   }
   HRESULT hr = g_real_create_swapchain_for_hwnd(factory, device, hwnd, desc, fullscreen_desc,
@@ -1289,129 +1284,126 @@ using NdCreateGraphicsPipelineStateFn = HRESULT(STDMETHODCALLTYPE*)(
 
 static NdCreateGraphicsPipelineStateFn g_real_create_graphics_pipeline_state = nullptr;
 
-struct NdPsoCacheEntry {
-  ID3D12PipelineState* pso{nullptr};
-  bool ready{false};
-};
-
 static std::mutex g_d3d12_pso_mtx;
-static std::unordered_map<uint64_t, NdPsoCacheEntry> g_d3d12_pso_map;
-static std::atomic<bool> g_d3d12_worker_active{false};
+static std::unordered_map<uint64_t, ID3D12PipelineState*> g_d3d12_pso_map;
+static ID3D12PipelineLibrary1* g_d3d12_pipeline_library = nullptr;
+static std::atomic<uint32_t> g_compiled_shader_count{0};
+static std::atomic<uint64_t> g_last_shader_compile_tick{0};
+static std::atomic<bool> g_show_shader_compilation{true};
 
-struct NdPsoAsyncJob {
-  ID3D12Device* device{nullptr};
-  uint64_t hash{0};
-  D3D12_GRAPHICS_PIPELINE_STATE_DESC desc{};
-  std::vector<uint8_t> vs_code;
-  std::vector<uint8_t> ps_code;
-  std::vector<uint8_t> gs_code;
-  std::vector<uint8_t> ds_code;
-  std::vector<uint8_t> hs_code;
-  IID riid{};
-};
-
-static std::mutex g_d3d12_queue_mtx;
-static std::vector<NdPsoAsyncJob> g_d3d12_pso_queue;
-static std::condition_variable g_d3d12_pso_cv;
-
-static void NdD3D12PsoWorkerThread() {
-  SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_BELOW_NORMAL);
-  while (g_d3d12_worker_active.load(std::memory_order_relaxed)) {
-    NdPsoAsyncJob job;
-    {
-      std::unique_lock<std::mutex> lk(g_d3d12_queue_mtx);
-      g_d3d12_pso_cv.wait(lk, []() {
-        return !g_d3d12_pso_queue.empty() || !g_d3d12_worker_active.load(std::memory_order_relaxed);
-      });
-      if (!g_d3d12_worker_active.load(std::memory_order_relaxed) && g_d3d12_pso_queue.empty()) {
-        break;
-      }
-      job = std::move(g_d3d12_pso_queue.front());
-      g_d3d12_pso_queue.erase(g_d3d12_pso_queue.begin());
-    }
-
-    if (!job.vs_code.empty()) {
-      job.desc.VS.pShaderBytecode = job.vs_code.data();
-      job.desc.VS.BytecodeLength = job.vs_code.size();
-    }
-    if (!job.ps_code.empty()) {
-      job.desc.PS.pShaderBytecode = job.ps_code.data();
-      job.desc.PS.BytecodeLength = job.ps_code.size();
-    }
-    if (!job.gs_code.empty()) {
-      job.desc.GS.pShaderBytecode = job.gs_code.data();
-      job.desc.GS.BytecodeLength = job.gs_code.size();
-    }
-    if (!job.ds_code.empty()) {
-      job.desc.DS.pShaderBytecode = job.ds_code.data();
-      job.desc.DS.BytecodeLength = job.ds_code.size();
-    }
-    if (!job.hs_code.empty()) {
-      job.desc.HS.pShaderBytecode = job.hs_code.data();
-      job.desc.HS.BytecodeLength = job.hs_code.size();
-    }
-
-    ID3D12PipelineState* compiled_pso = nullptr;
-    if (g_real_create_graphics_pipeline_state && job.device) {
-      HRESULT hr = g_real_create_graphics_pipeline_state(
-          job.device, &job.desc, job.riid, reinterpret_cast<void**>(&compiled_pso));
-      if (SUCCEEDED(hr) && compiled_pso) {
-        {
-          std::lock_guard<std::mutex> lk(g_d3d12_pso_mtx);
-          g_d3d12_pso_map[job.hash].pso = compiled_pso;
-          g_d3d12_pso_map[job.hash].ready = true;
-        }
-      }
+static void NdPumpWindowMessages() {
+  HWND hwnd = g_game_hwnd;
+  if (hwnd && IsWindow(hwnd)) {
+    MSG msg;
+    while (PeekMessageW(&msg, hwnd, 0, 0, PM_REMOVE)) {
+      TranslateMessage(&msg);
+      DispatchMessageW(&msg);
     }
   }
 }
 
-static void NdPersistCompiledPso(uint64_t pso_hash, const D3D12_GRAPHICS_PIPELINE_STATE_DESC* pDesc) {
-  if (!pDesc) return;
-  static std::mutex s_persist_mtx;
-  std::lock_guard<std::mutex> lk(s_persist_mtx);
-  static std::unordered_set<uint64_t> s_persisted_psos;
-  if (!s_persisted_psos.insert(pso_hash).second) return;
+//=============================================================================
+// OSD de Compilacion de Shaders (Esquina superior izquierda)
+//=============================================================================
+static HWND g_osd_hwnd = nullptr;
 
-  std::error_code ec;
-  std::filesystem::path cat_path = "cache/shader_catalog.bin";
-  std::filesystem::path pso_path = "cache/d3d12_pipeline_cache.bin";
+static LRESULT CALLBACK NdShaderOsdWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
+  switch (msg) {
+    case WM_PAINT: {
+      PAINTSTRUCT ps;
+      HDC hdc = BeginPaint(hwnd, &ps);
+      RECT rc;
+      GetClientRect(hwnd, &rc);
 
-  uint64_t vs_hash = 0;
-  if (pDesc->VS.pShaderBytecode && pDesc->VS.BytecodeLength) {
-    vs_hash = NdFnv1a64(pDesc->VS.pShaderBytecode, pDesc->VS.BytecodeLength);
-    std::ofstream cat_out(cat_path, std::ios::binary | std::ios::app);
-    if (cat_out.is_open()) {
-      uint32_t stage = 1;
-      uint32_t sz = static_cast<uint32_t>(pDesc->VS.BytecodeLength);
-      cat_out.write(reinterpret_cast<const char*>(&vs_hash), sizeof(vs_hash));
-      cat_out.write(reinterpret_cast<const char*>(&stage), sizeof(stage));
-      cat_out.write(reinterpret_cast<const char*>(&sz), sizeof(sz));
-      cat_out.write(reinterpret_cast<const char*>(pDesc->VS.pShaderBytecode), sz);
+      HBRUSH bg = CreateSolidBrush(RGB(18, 18, 24));
+      HBRUSH old_b = static_cast<HBRUSH>(SelectObject(hdc, bg));
+      HPEN pen = CreatePen(PS_SOLID, 1, RGB(70, 70, 85));
+      HPEN old_p = static_cast<HPEN>(SelectObject(hdc, pen));
+      RoundRect(hdc, rc.left, rc.top, rc.right, rc.bottom, 8, 8);
+      SelectObject(hdc, old_p);
+      SelectObject(hdc, old_b);
+      DeleteObject(pen);
+      DeleteObject(bg);
+
+      uint32_t count = g_compiled_shader_count.load(std::memory_order_relaxed);
+      wchar_t text[64];
+      swprintf_s(text, L"Compilando shaders %u", count);
+
+      SetBkMode(hdc, TRANSPARENT);
+      SetTextColor(hdc, RGB(240, 240, 245));
+      HFONT hFont = CreateFontW(15, 0, 0, 0, FW_SEMIBOLD, FALSE, FALSE, FALSE, DEFAULT_CHARSET,
+                                OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
+                                DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
+      HFONT old_f = static_cast<HFONT>(SelectObject(hdc, hFont));
+      RECT tr = rc;
+      tr.left += 12;
+      DrawTextW(hdc, text, -1, &tr, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+      SelectObject(hdc, old_f);
+      DeleteObject(hFont);
+
+      EndPaint(hwnd, &ps);
+      return 0;
     }
-  }
-
-  uint64_t ps_hash = 0;
-  if (pDesc->PS.pShaderBytecode && pDesc->PS.BytecodeLength) {
-    ps_hash = NdFnv1a64(pDesc->PS.pShaderBytecode, pDesc->PS.BytecodeLength);
-    std::ofstream cat_out(cat_path, std::ios::binary | std::ios::app);
-    if (cat_out.is_open()) {
-      uint32_t stage = 2;
-      uint32_t sz = static_cast<uint32_t>(pDesc->PS.BytecodeLength);
-      cat_out.write(reinterpret_cast<const char*>(&ps_hash), sizeof(ps_hash));
-      cat_out.write(reinterpret_cast<const char*>(&stage), sizeof(stage));
-      cat_out.write(reinterpret_cast<const char*>(&sz), sizeof(sz));
-      cat_out.write(reinterpret_cast<const char*>(pDesc->PS.pShaderBytecode), sz);
+    case WM_TIMER: {
+      if (wParam == 2) {
+        if (!g_show_shader_compilation.load(std::memory_order_relaxed)) {
+          if (IsWindowVisible(hwnd)) ShowWindow(hwnd, SW_HIDE);
+          return 0;
+        }
+        HWND ghwnd = NdGetGameWindow();
+        if (ghwnd && IsWindow(ghwnd) && IsWindowVisible(ghwnd)) {
+          uint64_t now = GetTickCount64();
+          uint64_t last = g_last_shader_compile_tick.load(std::memory_order_relaxed);
+          if (now >= last && (now - last) <= 2000 && g_compiled_shader_count.load() > 0) {
+            POINT pt{16, 16};
+            ClientToScreen(ghwnd, &pt);
+            SetWindowPos(hwnd, HWND_TOPMOST, pt.x, pt.y, 220, 32, SWP_NOACTIVATE | SWP_SHOWWINDOW);
+            InvalidateRect(hwnd, nullptr, TRUE);
+          } else {
+            if (IsWindowVisible(hwnd)) {
+              ShowWindow(hwnd, SW_HIDE);
+            }
+          }
+        } else {
+          if (IsWindowVisible(hwnd)) ShowWindow(hwnd, SW_HIDE);
+        }
+      }
+      return 0;
     }
+    case WM_ERASEBKGND:
+      return 1;
+    default:
+      break;
   }
+  return DefWindowProcW(hwnd, msg, wParam, lParam);
+}
 
-  std::ofstream pso_out(pso_path, std::ios::binary | std::ios::app);
-  if (pso_out.is_open()) {
-    uint32_t flags = 1;
-    pso_out.write(reinterpret_cast<const char*>(&pso_hash), sizeof(pso_hash));
-    pso_out.write(reinterpret_cast<const char*>(&vs_hash), sizeof(vs_hash));
-    pso_out.write(reinterpret_cast<const char*>(&ps_hash), sizeof(ps_hash));
-    pso_out.write(reinterpret_cast<const char*>(&flags), sizeof(flags));
+static void NdEnsureShaderOsdWindow() {
+  static std::mutex s_osd_mtx;
+  std::lock_guard<std::mutex> lk(s_osd_mtx);
+  if (g_osd_hwnd && IsWindow(g_osd_hwnd)) return;
+
+  HINSTANCE hInst = GetModuleHandleW(nullptr);
+  WNDCLASSEXW wc{};
+  wc.cbSize = sizeof(wc);
+  wc.style = CS_HREDRAW | CS_VREDRAW;
+  wc.lpfnWndProc = NdShaderOsdWndProc;
+  wc.hInstance = hInst;
+  wc.hCursor = LoadCursor(nullptr, IDC_ARROW);
+  wc.hbrBackground = nullptr;
+  wc.lpszClassName = L"NeverDeadShaderOsdClass";
+  RegisterClassExW(&wc);
+
+  HWND ghwnd = NdGetGameWindow();
+  g_osd_hwnd = CreateWindowExW(
+      WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_LAYERED | WS_EX_TRANSPARENT | WS_EX_NOACTIVATE,
+      L"NeverDeadShaderOsdClass", L"",
+      WS_POPUP, 0, 0, 220, 32,
+      ghwnd, nullptr, hInst, nullptr);
+
+  if (g_osd_hwnd) {
+    SetLayeredWindowAttributes(g_osd_hwnd, 0, 220, LWA_ALPHA);
+    SetTimer(g_osd_hwnd, 2, 50, nullptr);
   }
 }
 
@@ -1436,64 +1428,98 @@ extern "C" HRESULT STDMETHODCALLTYPE NdCreateGraphicsPipelineStateDetour(
     hash ^= NdFnv1a64(pDesc->PS.pShaderBytecode, pDesc->PS.BytecodeLength);
   }
 
+  // 1. Consulta rapida en cache en memoria
   {
     std::lock_guard<std::mutex> lk(g_d3d12_pso_mtx);
     auto it = g_d3d12_pso_map.find(hash);
-    if (it != g_d3d12_pso_map.end() && it->second.ready && it->second.pso != nullptr) {
-      it->second.pso->AddRef();
-      *ppPipelineState = it->second.pso;
+    if (it != g_d3d12_pso_map.end() && it->second != nullptr) {
+      it->second->AddRef();
+      *ppPipelineState = it->second;
       return S_OK;
     }
   }
 
-  if (g_in_3d_gameplay.load(std::memory_order_relaxed)) {
-    bool already_enqueued = false;
-    {
-      std::lock_guard<std::mutex> lk(g_d3d12_pso_mtx);
-      if (g_d3d12_pso_map.find(hash) != g_d3d12_pso_map.end()) {
-        already_enqueued = true;
-      } else {
-        g_d3d12_pso_map[hash].ready = false;
-        g_d3d12_pso_map[hash].pso = nullptr;
+  wchar_t pso_name[64];
+  swprintf_s(pso_name, L"PSO_%016llX", hash);
+
+  // 2. Inicializacion bajo demanda de ID3D12PipelineLibrary1 desde cache/d3d12_pipeline_cache.bin
+  {
+    std::lock_guard<std::mutex> lk(g_d3d12_pso_mtx);
+    if (!g_d3d12_pipeline_library && This) {
+      ID3D12Device1* dev1 = nullptr;
+      if (SUCCEEDED(This->QueryInterface(IID_PPV_ARGS(&dev1))) && dev1) {
+        std::vector<uint8_t> init_blob;
+        std::filesystem::path pso_path = "cache/d3d12_pipeline_cache.bin";
+        std::error_code ec;
+        if (std::filesystem::exists(pso_path, ec)) {
+          std::ifstream in(pso_path, std::ios::binary | std::ios::ate);
+          if (in.is_open()) {
+            size_t sz = static_cast<size_t>(in.tellg());
+            if (sz > 0) {
+              init_blob.resize(sz);
+              in.seekg(0, std::ios::beg);
+              in.read(reinterpret_cast<char*>(init_blob.data()), sz);
+            }
+          }
+        }
+        HRESULT hr_lib = E_FAIL;
+        if (!init_blob.empty()) {
+          hr_lib = dev1->CreatePipelineLibrary(
+              init_blob.data(), init_blob.size(),
+              IID_PPV_ARGS(&g_d3d12_pipeline_library));
+        }
+        if (FAILED(hr_lib) || !g_d3d12_pipeline_library) {
+          dev1->CreatePipelineLibrary(
+              nullptr, 0,
+              IID_PPV_ARGS(&g_d3d12_pipeline_library));
+        }
+        dev1->Release();
       }
     }
 
-    if (!already_enqueued) {
-      NdPsoAsyncJob job;
-      job.device = This;
-      job.hash = hash;
-      job.desc = *pDesc;
-      job.riid = riid;
-      if (pDesc->VS.pShaderBytecode && pDesc->VS.BytecodeLength) {
-        job.vs_code.assign(
-            reinterpret_cast<const uint8_t*>(pDesc->VS.pShaderBytecode),
-            reinterpret_cast<const uint8_t*>(pDesc->VS.pShaderBytecode) + pDesc->VS.BytecodeLength);
+    // 3. Carga desde PipelineLibrary si ya existe
+    if (g_d3d12_pipeline_library) {
+      ID3D12PipelineState* lib_pso = nullptr;
+      HRESULT hr_lib = g_d3d12_pipeline_library->LoadGraphicsPipeline(
+          pso_name, pDesc, riid, reinterpret_cast<void**>(&lib_pso));
+      if (SUCCEEDED(hr_lib) && lib_pso) {
+        g_d3d12_pso_map[hash] = lib_pso;
+        *ppPipelineState = lib_pso;
+        return S_OK;
       }
-      if (pDesc->PS.pShaderBytecode && pDesc->PS.BytecodeLength) {
-        job.ps_code.assign(
-            reinterpret_cast<const uint8_t*>(pDesc->PS.pShaderBytecode),
-            reinterpret_cast<const uint8_t*>(pDesc->PS.pShaderBytecode) + pDesc->PS.BytecodeLength);
-      }
-      {
-        std::lock_guard<std::mutex> lk(g_d3d12_queue_mtx);
-        g_d3d12_pso_queue.push_back(std::move(job));
-      }
-      g_d3d12_pso_cv.notify_one();
     }
-    *ppPipelineState = nullptr;
-    return E_PENDING;
   }
 
+  // 4. Compilacion sincronica directa para garantizar que NUNCA devuelva nullptr o E_PENDING
   HRESULT hr = g_real_create_graphics_pipeline_state(This, pDesc, riid, ppPipelineState);
-  if (SUCCEEDED(hr) && *ppPipelineState) {
+  if (SUCCEEDED(hr) && ppPipelineState && *ppPipelineState) {
+    auto* compiled_pso = reinterpret_cast<ID3D12PipelineState*>(*ppPipelineState);
+    compiled_pso->AddRef();
+
     {
       std::lock_guard<std::mutex> lk(g_d3d12_pso_mtx);
-      auto* pso = reinterpret_cast<ID3D12PipelineState*>(*ppPipelineState);
-      pso->AddRef();
-      g_d3d12_pso_map[hash].pso = pso;
-      g_d3d12_pso_map[hash].ready = true;
+      g_d3d12_pso_map[hash] = compiled_pso;
+      if (g_d3d12_pipeline_library) {
+        g_d3d12_pipeline_library->StorePipeline(pso_name, compiled_pso);
+        SIZE_T ser_sz = g_d3d12_pipeline_library->GetSerializedSize();
+        if (ser_sz > 0) {
+          std::vector<uint8_t> ser_data(ser_sz);
+          if (SUCCEEDED(g_d3d12_pipeline_library->Serialize(ser_data.data(), ser_sz))) {
+            std::error_code ec;
+            std::filesystem::create_directories("cache", ec);
+            std::ofstream out("cache/d3d12_pipeline_cache.bin", std::ios::binary | std::ios::trunc);
+            if (out.is_open()) {
+              out.write(reinterpret_cast<const char*>(ser_data.data()), ser_sz);
+            }
+          }
+        }
+      }
     }
-    NdPersistCompiledPso(hash, pDesc);
+
+    g_compiled_shader_count.fetch_add(1, std::memory_order_relaxed);
+    g_last_shader_compile_tick.store(GetTickCount64(), std::memory_order_relaxed);
+    NdEnsureShaderOsdWindow();
+    NdPumpWindowMessages();
   }
   return hr;
 }
@@ -1501,11 +1527,6 @@ extern "C" HRESULT STDMETHODCALLTYPE NdCreateGraphicsPipelineStateDetour(
 void nd_install_d3d12_device_hook() {
   static std::atomic<bool> s_installed{false};
   if (s_installed.exchange(true)) return;
-
-  if (!g_d3d12_worker_active.exchange(true)) {
-    std::thread worker(NdD3D12PsoWorkerThread);
-    worker.detach();
-  }
 
   HMODULE d3d12_mod = GetModuleHandleA("d3d12.dll");
   if (!d3d12_mod) {
@@ -1683,7 +1704,7 @@ void NdPatchAsyncPipelineCache() {
   }
   uint8_t* base = reinterpret_cast<uint8_t*>(mod);
 
-  uint64_t timeout_ms = 1; // Default: 1 ms
+  uint64_t timeout_ms = 0; // Default: 0 ms (non-blocking poll)
   const char* env_to = std::getenv("ND_PSO_TIMEOUT_MS");
   if (env_to != nullptr) {
     timeout_ms = std::strtoull(env_to, nullptr, 10);
@@ -1697,12 +1718,12 @@ void NdPatchAsyncPipelineCache() {
 
   for (size_t rva : kCandidates) {
     uint8_t* site = base + rva;
-    if (site[0] == 0x49 && site[1] == 0xB8 && (site[2] == 0x01 || std::memcmp(site, kPatched, sizeof(kPatched)) == 0)) {
+    if (site[0] == 0x49 && site[1] == 0xB8 && std::memcmp(site, kPatched, sizeof(kPatched)) == 0) {
       s_done.store(true, std::memory_order_relaxed);
       REXLOG_INFO("neverdead: [ASYNC-PSO] Timeout en PipelineCache::EndSubmission ya se encuentra parcheado a {} ms en rexgpu-xenos+0x{:X}", timeout_ms, rva);
       return;
     }
-    if (site[0] == 0x49 && site[1] == 0xB8 && site[2] == 0xFF && site[9] == 0x7F) {
+    if (site[0] == 0x49 && site[1] == 0xB8 && (site[2] == 0x01 || (site[2] == 0xFF && site[9] == 0x7F))) {
       target = site;
       chosen_rva = rva;
       break;
@@ -1718,13 +1739,13 @@ void NdPatchAsyncPipelineCache() {
     for (size_t off = 0; off + 10 <= text_size; ++off) {
       const uint8_t* site = text_start + off;
       if (site[0] == 0x49 && site[1] == 0xB8) {
-        if (site[2] == 0x01 && site[9] == 0x00) {
+        if (std::memcmp(site, kPatched, sizeof(kPatched)) == 0) {
           size_t rva = static_cast<size_t>(site - base);
           s_done.store(true, std::memory_order_relaxed);
           REXLOG_INFO("neverdead: [ASYNC-PSO] Timeout en PipelineCache::EndSubmission ya se encuentra parcheado a {} ms en rexgpu-xenos+0x{:X}", timeout_ms, rva);
           return;
         }
-        if (site[2] == 0xFF && site[9] == 0x7F) {
+        if ((site[2] == 0xFF && site[9] == 0x7F) || site[2] == 0x01) {
           target = const_cast<uint8_t*>(site);
           chosen_rva = static_cast<size_t>(site - base);
           break;
@@ -1752,8 +1773,71 @@ void NdPatchAsyncPipelineCache() {
         timeout_ms, chosen_rva);
   }
 }
+
 //=============================================================================
-// NdEnsureTimerResolution defined above
+// Silenciado de logs de spam que bloquean I/O (73,974 lineas)
+//=============================================================================
+void NdSilenceSpamLogs() {
+  static std::atomic<bool> s_done{false};
+  if (s_done.load(std::memory_order_relaxed)) return;
+
+  // 1. Silenciar PM4_DRAW_INDX y Vertex fetch en rexgpu-xenos.dll
+  HMODULE gpu_mod = GetModuleHandleA("rexgpu-xenos.dll");
+  if (gpu_mod) {
+    uint8_t* base = reinterpret_cast<uint8_t*>(gpu_mod);
+
+    // RVA 0x15881: 0F 84 BD 00 00 00 -> E9 BE 00 00 00 90 (jmp 0x15944)
+    uint8_t* p1 = base + 0x15881;
+    DWORD old1 = 0;
+    if (VirtualProtect(p1, 6, PAGE_EXECUTE_READWRITE, &old1)) {
+      p1[0] = 0xE9; p1[1] = 0xBE; p1[2] = 0x00; p1[3] = 0x00; p1[4] = 0x00; p1[5] = 0x90;
+      DWORD ign = 0;
+      VirtualProtect(p1, 6, old1, &ign);
+      FlushInstructionCache(GetCurrentProcess(), p1, 6);
+    }
+
+    // RVA 0xA68F1: 0F 84 89 04 00 00 -> E9 8A 04 00 00 90 (jmp 0xA6D80)
+    uint8_t* p2 = base + 0xA68F1;
+    DWORD old2 = 0;
+    if (VirtualProtect(p2, 6, PAGE_EXECUTE_READWRITE, &old2)) {
+      p2[0] = 0xE9; p2[1] = 0x8A; p2[2] = 0x04; p2[3] = 0x00; p2[4] = 0x00; p2[5] = 0x90;
+      DWORD ign = 0;
+      VirtualProtect(p2, 6, old2, &ign);
+      FlushInstructionCache(GetCurrentProcess(), p2, 6);
+    }
+
+    // RVA 0xA6976: 0F 8F 04 04 00 00 -> E9 05 04 00 00 90 (jmp 0xA6D80)
+    uint8_t* p3 = base + 0xA6976;
+    DWORD old3 = 0;
+    if (VirtualProtect(p3, 6, PAGE_EXECUTE_READWRITE, &old3)) {
+      p3[0] = 0xE9; p3[1] = 0x05; p3[2] = 0x04; p3[3] = 0x00; p3[4] = 0x00; p3[5] = 0x90;
+      DWORD ign = 0;
+      VirtualProtect(p3, 6, old3, &ign);
+      FlushInstructionCache(GetCurrentProcess(), p3, 6);
+    }
+    REXLOG_INFO("neverdead: [LOG-FILTER] Logs de PM4_DRAW_INDX y Vertex fetch silenciados en rexgpu-xenos");
+  }
+
+  // 2. Silenciar UIPaint en rexruntime.dll
+  HMODULE rt_mod = GetModuleHandleA("rexruntime.dll");
+  if (rt_mod) {
+    uint8_t* base = reinterpret_cast<uint8_t*>(rt_mod);
+    // RVA 0xE4150: 74 7F -> EB 7F (jmp 0xE41D1)
+    uint8_t* p4 = base + 0xE4150;
+    DWORD old4 = 0;
+    if (VirtualProtect(p4, 2, PAGE_EXECUTE_READWRITE, &old4)) {
+      p4[0] = 0xEB; p4[1] = 0x7F;
+      DWORD ign = 0;
+      VirtualProtect(p4, 2, old4, &ign);
+      FlushInstructionCache(GetCurrentProcess(), p4, 2);
+      REXLOG_INFO("neverdead: [LOG-FILTER] Log de UIPaint silenciado en rexruntime");
+    }
+  }
+
+  if (gpu_mod && rt_mod) {
+    s_done.store(true, std::memory_order_relaxed);
+  }
+}
 
 void NdEarlyInit() {
   NdLoadSettingsFromIni();
@@ -1769,6 +1853,8 @@ void NdEarlyInit() {
   NdInstallPaintReturnHook();
   NdInstallPresentGate();
   NdSilenceXctdLog();
+  NdSilenceSpamLogs();
+  NdPatchAsyncPipelineCache();
   nd_install_d3d12_device_hook();
 }
 void NdVdSetDisplayModeHook(PPCRegister& r3) {
@@ -1867,10 +1953,10 @@ static inline void nd_store_be32(uint8_t* p, uint32_t val) {
 static bool NdXdkFilterEnabled() {
   static const bool s = []() {
     const char* v = std::getenv("ND_XDK_FILTER");
-    if (v != nullptr && v[0] == '0') {
-      return false;
+    if (v != nullptr && v[0] == '1') {
+      return true; // Solo si se fuerza explicitamente por variable de entorno
     }
-    return true; // Habilitado por defecto para filtrar redundancias en PM4
+    return false; // Desactivado por defecto para evitar sobrescribir con NOP y corromper Vertex fetch constants
   }();
   return s;
 }
@@ -2650,12 +2736,8 @@ static void NdDumpAsuraCVarsOnce() {
 
 
 //=============================================================================
-// Menu F1 — Dark Mode nativo, 520x320, logica positiva, F1/ESC instantaneo
+// Menu F10 — Dark Mode nativo, 520x375, logica positiva, F10/ESC instantaneo
 //=============================================================================
-// Spec v8: cero "echoing" visual (sin hexadecimales, sin "Desactivar" repetido,
-// sin parrafos de ayuda), casillas con logica positiva (marcada = efecto ON) y
-// toggle F1/ESC por timer de 16 ms en la propia ventana, asi funciona aunque el
-// menu tenga el foco.
 enum {
   IDC_CFG_COMBO_WND = 1001,
   IDC_CFG_COMBO_FPS = 1002,
@@ -2672,6 +2754,7 @@ enum {
   IDC_CFG_CHK_HUD,
   IDC_CFG_CHK_LUMA_OPT = 1025,
   IDC_CFG_CHK_UNLOCK_FPS = 1026,
+  IDC_CFG_CHK_SHOW_SHADERS = 1027,
   IDC_CFG_BTN_CLOSE = 1030,
   IDC_CFG_BTN_EXIT_DESKTOP,
   IDC_CFG_PRESET_LOW,
@@ -2720,12 +2803,12 @@ static const uint32_t kPresetFlags[] = {
 };
 static constexpr uint32_t kHudVa = 0x828E1FC3;
 
-// Estado del toggle F1/ESC: compartido entre WM_KEYDOWN (ventana con foco) y
+// Estado del toggle F10/ESC: compartido entre WM_KEYDOWN (ventana con foco) y
 // WM_TIMER (sondeo global). `*_wm_handled` impide que ambas vias cuenten la
 // misma pulsacion como dos toggles.
-static bool s_f1_wm_handled = false;
+static bool s_f10_wm_handled = false;
 static bool s_esc_wm_handled = false;
-static bool s_f1_prev = false;
+static bool s_f10_prev = false;
 static bool s_esc_prev = false;
 
 // dwmapi/uxtheme se resuelven dinamicamente: cero cambios en CMakeLists.
@@ -2803,6 +2886,10 @@ void NdLoadSettingsFromIni() {
   GetPrivateProfileStringW(L"Graphics", L"UnlockFramerate", L"false", buf, 64, ini.c_str());
   bool unlock = (_wcsicmp(buf, L"true") == 0 || wcstol(buf, nullptr, 10) == 1);
 
+  GetPrivateProfileStringW(L"Graphics", L"ShowShaderCompilation", L"true", buf, 64, ini.c_str());
+  bool show_shaders = (_wcsicmp(buf, L"false") != 0 && _wcsicmp(buf, L"0") != 0);
+  g_show_shader_compilation.store(show_shaders, std::memory_order_relaxed);
+
   GetPrivateProfileStringW(L"Graphics", L"AdaptiveExposureOptimization", L"true", buf, 64, ini.c_str());
   bool luma_opt = (_wcsicmp(buf, L"false") != 0 && _wcsicmp(buf, L"0") != 0);
   g_opt_luma_resolve.store(luma_opt, std::memory_order_relaxed);
@@ -2848,6 +2935,9 @@ void NdSaveSettingsToIni() {
   bool unlock = g_unlock_fps.load(std::memory_order_relaxed);
   WritePrivateProfileStringW(L"Graphics", L"UnlockFramerate", unlock ? L"true" : L"false", ini.c_str());
 
+  bool show_shaders = g_show_shader_compilation.load(std::memory_order_relaxed);
+  WritePrivateProfileStringW(L"Graphics", L"ShowShaderCompilation", show_shaders ? L"true" : L"false", ini.c_str());
+
   bool luma_opt = g_opt_luma_resolve.load(std::memory_order_relaxed);
   WritePrivateProfileStringW(L"Graphics", L"AdaptiveExposureOptimization", luma_opt ? L"true" : L"false", ini.c_str());
 
@@ -2877,6 +2967,10 @@ static void NdSyncCheckboxesFromMemory(HWND hwnd) {
   HWND chkUnlock = GetDlgItem(hwnd, IDC_CFG_CHK_UNLOCK_FPS);
   if (chkUnlock != nullptr) {
     SendMessageW(chkUnlock, BM_SETCHECK, g_unlock_fps.load() ? BST_CHECKED : BST_UNCHECKED, 0);
+  }
+  HWND chkShaders = GetDlgItem(hwnd, IDC_CFG_CHK_SHOW_SHADERS);
+  if (chkShaders != nullptr) {
+    SendMessageW(chkShaders, BM_SETCHECK, g_show_shader_compilation.load() ? BST_CHECKED : BST_UNCHECKED, 0);
   }
 }
 
@@ -2930,7 +3024,7 @@ static void NdApplyWindowMode(int idx) {
                  SWP_FRAMECHANGED | SWP_SHOWWINDOW);
   } else {  // sin bordes
     SetWindowLongPtrW(ghwnd, GWL_STYLE, WS_POPUP | WS_VISIBLE);
-    SetWindowPos(ghwnd, HWND_TOP, 0, 0, GetSystemMetrics(SM_CXSCREEN),
+    SetWindowPos(ghwnd, HWND_TOPMOST, 0, 0, GetSystemMetrics(SM_CXSCREEN),
                  GetSystemMetrics(SM_CYSCREEN), SWP_FRAMECHANGED | SWP_SHOWWINDOW);
   }
   NdSaveSettingsToIni();
@@ -2938,7 +3032,10 @@ static void NdApplyWindowMode(int idx) {
 
 static void NdHideConfigAndFocusGame(HWND hwnd) {
   ShowWindow(hwnd, SW_HIDE);
-  if (HWND g = NdGetGameWindow()) SetForegroundWindow(g);
+  if (HWND g = NdGetGameWindow()) {
+    SetForegroundWindow(g);
+    SetFocus(g);
+  }
 }
 
 // Banner NEVERDETH: BMP de 520x44 con el fondo carbon exacto del menu (LoadImage
@@ -3055,14 +3152,21 @@ static void NdCreateConfigControls(HWND hwnd) {
   NdDisableTheme(chkUnlock);
   SendMessageW(chkUnlock, BM_SETCHECK, g_unlock_fps.load() ? BST_CHECKED : BST_UNCHECKED, 0);
 
+  HWND chkShaders = CreateWindowW(L"BUTTON", L"Mostrar Compilación de Shaders", WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX,
+                                  25, 295, 240, 22, hwnd, reinterpret_cast<HMENU>(IDC_CFG_CHK_SHOW_SHADERS),
+                                  nullptr, nullptr);
+  set_font(chkShaders, hFont);
+  NdDisableTheme(chkShaders);
+  SendMessageW(chkShaders, BM_SETCHECK, g_show_shader_compilation.load() ? BST_CHECKED : BST_UNCHECKED, 0);
+
   // --- Fila inferior ---
   HWND btnClose = CreateWindowW(L"BUTTON", L"Volver al Juego (F10 / ESC)",
-                                WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON | BS_OWNERDRAW, 20, 302, 230, 32, hwnd,
+                                WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON | BS_OWNERDRAW, 20, 328, 230, 32, hwnd,
                                 reinterpret_cast<HMENU>(IDC_CFG_BTN_CLOSE), nullptr, nullptr);
   set_font(btnClose, hFontBold);
   NdDisableTheme(btnClose);
   HWND btnExit = CreateWindowW(L"BUTTON", L"Salir al Escritorio",
-                               WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON | BS_OWNERDRAW, 275, 302, 220, 32, hwnd,
+                               WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON | BS_OWNERDRAW, 275, 328, 220, 32, hwnd,
                                reinterpret_cast<HMENU>(IDC_CFG_BTN_EXIT_DESKTOP), nullptr,
                                nullptr);
   set_font(btnExit, hFontBold);
@@ -3098,9 +3202,9 @@ static LRESULT CALLBACK NdConfigWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPAR
     }
     case WM_KEYDOWN:
     case WM_SYSKEYDOWN: {
-      if (wParam == VK_F10 || wParam == VK_F1) {
-        if (!s_f1_wm_handled) {
-          s_f1_wm_handled = true;
+      if (wParam == VK_F10) {
+        if (!s_f10_wm_handled) {
+          s_f10_wm_handled = true;
           if (IsWindowVisible(hwnd)) {
             NdHideConfigAndFocusGame(hwnd);
           } else {
@@ -3122,28 +3226,34 @@ static LRESULT CALLBACK NdConfigWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPAR
     }
     case WM_KEYUP:
     case WM_SYSKEYUP: {
-      if (wParam == VK_F10 || wParam == VK_F1) s_f1_wm_handled = false;
+      if (wParam == VK_F10) s_f10_wm_handled = false;
       if (wParam == VK_ESCAPE) s_esc_wm_handled = false;
       break;
     }
     case WM_TIMER: {
       if (wParam != IDC_CFG_TIMER_ID) break;
       const bool f10_down = (GetAsyncKeyState(VK_F10) & 0x8000) != 0;
-      const bool f1_down = (GetAsyncKeyState(VK_F1) & 0x8000) != 0;
       const bool esc_down = (GetAsyncKeyState(VK_ESCAPE) & 0x8000) != 0;
-      const bool toggle_down = f10_down || f1_down;
-      const bool toggle_edge = toggle_down && !s_f1_prev && !s_f1_wm_handled;
+      const bool toggle_edge = f10_down && !s_f10_prev && !s_f10_wm_handled;
       const bool esc_edge = esc_down && !s_esc_prev && !s_esc_wm_handled;
       const bool requested = g_menu_toggle_request.exchange(false);
-      s_f1_prev = toggle_down;
+      s_f10_prev = f10_down;
       s_esc_prev = esc_down;
       if (toggle_edge || requested) {
         if (IsWindowVisible(hwnd)) {
           NdHideConfigAndFocusGame(hwnd);
         } else {
           NdSyncCheckboxesFromMemory(hwnd);
+          HWND parent_hwnd = NdGetGameWindow();
+          if (s_window_mode == 2 && parent_hwnd != nullptr && IsWindow(parent_hwnd)) {
+            const int screen_w = GetSystemMetrics(SM_CXSCREEN);
+            const int screen_h = GetSystemMetrics(SM_CYSCREEN);
+            SetWindowPos(parent_hwnd, HWND_TOPMOST, 0, 0, screen_w, screen_h, SWP_SHOWWINDOW | SWP_FRAMECHANGED);
+          }
           ShowWindow(hwnd, SW_SHOW);
+          SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW);
           SetForegroundWindow(hwnd);
+          SetFocus(hwnd);
         }
         return 0;
       }
@@ -3254,6 +3364,16 @@ static LRESULT CALLBACK NdConfigWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPAR
         NdApplyWindowMode(static_cast<int>(SendMessageW(cb, CB_GETCURSEL, 0, 0)));
         return 0;
       }
+      if (id == IDC_CFG_CHK_SHOW_SHADERS && code == BN_CLICKED) {
+        const bool on =
+            SendMessageW(reinterpret_cast<HWND>(lParam), BM_GETCHECK, 0, 0) == BST_CHECKED;
+        g_show_shader_compilation.store(on, std::memory_order_relaxed);
+        if (!on && g_osd_hwnd != nullptr) {
+          ShowWindow(g_osd_hwnd, SW_HIDE);
+        }
+        NdSaveSettingsToIni();
+        return 0;
+      }
       // Casillas con soporte de polaridad booleana normal e invertida
       for (const auto& t : kToggles) {
         if (id == t.id && code == BN_CLICKED) {
@@ -3302,15 +3422,18 @@ static void NdRunConfigUIDialog() {
   wc.lpszClassName = L"NeverDeadConfigClass";
   RegisterClassExW(&wc);
 
-  RECT rc = {0, 0, 520, 355};
-  AdjustWindowRectEx(&rc, WS_POPUP | WS_CAPTION | WS_SYSMENU, FALSE, 0);
+  RECT rc = {0, 0, 520, 375};
+  const DWORD dwExStyle = WS_EX_TOPMOST | WS_EX_TOOLWINDOW;
+  AdjustWindowRectEx(&rc, WS_POPUP | WS_CAPTION | WS_SYSMENU, FALSE, dwExStyle);
   const int w = rc.right - rc.left;
   const int h = rc.bottom - rc.top;
   const int x = (GetSystemMetrics(SM_CXSCREEN) - w) / 2;
   const int y = (GetSystemMetrics(SM_CYSCREEN) - h) / 2;
 
-  HWND hwnd = CreateWindowExW(0, L"NeverDeadConfigClass", L"Neverdeth (v0.1.0-alpha) — Settings (F10)",
-                              WS_POPUP | WS_CAPTION | WS_SYSMENU, x, y, w, h, nullptr, nullptr,
+  HWND parent_hwnd = NdGetGameWindow();
+  HWND hwnd = CreateWindowExW(dwExStyle, L"NeverDeadConfigClass",
+                              L"Neverdeth (v0.1.0-alpha) — Settings (F10)",
+                              WS_POPUP | WS_CAPTION | WS_SYSMENU, x, y, w, h, parent_hwnd, nullptr,
                               hInst, nullptr);
   if (hwnd == nullptr) {
     g_config_ui_open.store(false, std::memory_order_release);
@@ -3338,9 +3461,18 @@ static void NdRunConfigUIDialog() {
   NdCreateConfigControls(hwnd);
   SetTimer(hwnd, IDC_CFG_TIMER_ID, 16, nullptr);
 
-  ShowWindow(hwnd, SW_SHOW);
+  if (s_window_mode == 2 && parent_hwnd != nullptr && IsWindow(parent_hwnd)) {
+    const int screen_w = GetSystemMetrics(SM_CXSCREEN);
+    const int screen_h = GetSystemMetrics(SM_CYSCREEN);
+    SetWindowPos(parent_hwnd, HWND_TOPMOST, 0, 0, screen_w, screen_h,
+                 SWP_SHOWWINDOW | SWP_FRAMECHANGED);
+    SetWindowPos(hwnd, HWND_TOPMOST, x, y, w, h, SWP_SHOWWINDOW);
+  } else {
+    ShowWindow(hwnd, SW_SHOW);
+  }
   UpdateWindow(hwnd);
   SetForegroundWindow(hwnd);
+  SetFocus(hwnd);
 
   MSG msg{};
   while (GetMessageW(&msg, nullptr, 0, 0) > 0) {
@@ -3357,9 +3489,18 @@ void NdOpenConfigUI() {
       IsWindow(existing)) {
     if (!IsWindowVisible(existing)) {
       NdSyncCheckboxesFromMemory(existing);
+      HWND parent_hwnd = NdGetGameWindow();
+      if (s_window_mode == 2 && parent_hwnd != nullptr && IsWindow(parent_hwnd)) {
+        const int screen_w = GetSystemMetrics(SM_CXSCREEN);
+        const int screen_h = GetSystemMetrics(SM_CYSCREEN);
+        SetWindowPos(parent_hwnd, HWND_TOPMOST, 0, 0, screen_w, screen_h,
+                     SWP_SHOWWINDOW | SWP_FRAMECHANGED);
+      }
       ShowWindow(existing, SW_SHOW);
+      SetWindowPos(existing, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW);
     }
     SetForegroundWindow(existing);
+    SetFocus(existing);
     return;
   }
   if (g_config_ui_open.exchange(true, std::memory_order_acq_rel)) {
@@ -3374,7 +3515,7 @@ static void NdSyncFpsClampMemory(float target) {
   // (desbloqueado). Con cualquier otro valor el motor Asura se queda esperando
   // vblanks que nunca llegan tras el primer VdSwap: la ventana queda en negro
   // aunque se sigan presentando frames. El limite real lo aplica el pacer host
-  // (NdApplyFramePacer) y el menu F1, sin tocar esta variable.
+  // (NdApplyFramePacer) y el menu F10, sin tocar esta variable.
   uint8_t* p = nd_translate_va(0x82B31FBC);
   if (p != nullptr) {
     write_guest_be32(0x82B31FBC, float_to_be_bits(0.0f));

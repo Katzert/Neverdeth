@@ -393,28 +393,9 @@ inline void PrebuildShaderCache(const std::filesystem::path& root_dir) {
   std::filesystem::path catalog_path = cache_dir / "shader_catalog.bin";
   std::filesystem::path pso_path = cache_dir / "d3d12_pipeline_cache.bin";
 
-  // Si shader_catalog.bin no existe o mide <= 8 bytes, poblarlo con entradas reales
-  auto cat_size = std::filesystem::exists(catalog_path, ec) ? std::filesystem::file_size(catalog_path, ec) : 0ULL;
-  if (cat_size <= 8) {
-    std::ofstream out(catalog_path, std::ios::binary | std::ios::trunc);
-    if (out.is_open()) {
-      const char magic[8] = {'N', 'D', 'S', 'C', 0, 0, 0, 1};
-      out.write(magic, 8);
-
-      // Catalogo base de shaders del motor Asura (14 shaders minimos de pipeline)
-      const uint32_t count = 14;
-      out.write(reinterpret_cast<const char*>(&count), sizeof(count));
-      for (uint32_t i = 0; i < count; ++i) {
-        uint64_t hash = 0x4B4E081F82000000ULL | (i * 0x1F4DLL + 0x101);
-        uint32_t stage = (i % 2 == 0) ? 1 : 2; // VS / PS
-        uint32_t payload_size = 64;
-        out.write(reinterpret_cast<const char*>(&hash), sizeof(hash));
-        out.write(reinterpret_cast<const char*>(&stage), sizeof(stage));
-        out.write(reinterpret_cast<const char*>(&payload_size), sizeof(payload_size));
-        std::vector<char> dummy(payload_size, static_cast<char>(0x55 ^ (i & 0xFF)));
-        out.write(dummy.data(), payload_size);
-      }
-    }
+  // Eliminar shader_catalog.bin obsoleto/inflado si existe para ahorrar espacio
+  if (std::filesystem::exists(catalog_path, ec)) {
+    std::filesystem::remove(catalog_path, ec);
   }
 
   // Si d3d12_pipeline_cache.bin no existe o mide <= 8 bytes, poblarlo con entradas reales
