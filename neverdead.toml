@@ -26,7 +26,7 @@ d3d12_allow_variable_refresh_rate_and_tearing = true
 
 async_shader_compilation = true
 store_shaders = true
-d3d12_pipeline_creation_threads = -1
+d3d12_pipeline_creation_threads = 4
 cache_root = "cache"
 
 clear_memory_page_state = false

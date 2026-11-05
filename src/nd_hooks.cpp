@@ -1109,6 +1109,7 @@ void NdHookSwapChainVtable(IDXGISwapChain* swap_chain) {
 }
 static HWND g_game_hwnd = nullptr;
 static HWND g_config_hwnd = nullptr;
+static void NdSavePipelineLibraryCache();
 // Peticion de toggle del menu F10: la ventana del juego solo la marca; el timer
 // de 16 ms de la ventana del menu es el unico que ejecuta el toggle, asi no se
 // puede togglear dos veces cuando el foco esta en el juego.
@@ -1126,8 +1127,11 @@ LRESULT CALLBACK NdGameSubclassWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARA
     return 0;
   }
   if (msg == WM_CLOSE || msg == WM_DESTROY) {
-    REXLOG_INFO("neverdead: [CLEAN-EXIT] WM_CLOSE/WM_DESTROY interceptado en HWND {:p}; cerrando proceso limpiamente...",
+    REXLOG_INFO("neverdead: [CLEAN-EXIT] WM_CLOSE/WM_DESTROY interceptado en HWND {:p}; guardando pipeline cache...",
                 static_cast<void*>(hwnd));
+    NdSavePipelineLibraryCache();
+    fflush(nullptr);
+    _flushall();
     TerminateProcess(GetCurrentProcess(), 0);
     return 0;
   }
@@ -1284,22 +1288,65 @@ using NdCreateGraphicsPipelineStateFn = HRESULT(STDMETHODCALLTYPE*)(
 
 static NdCreateGraphicsPipelineStateFn g_real_create_graphics_pipeline_state = nullptr;
 
-static std::mutex g_d3d12_pso_mtx;
-static std::unordered_map<uint64_t, ID3D12PipelineState*> g_d3d12_pso_map;
+static SRWLOCK g_pso_cache_srw = SRWLOCK_INIT;
+static std::unordered_map<uint64_t, ID3D12PipelineState*> g_pso_memory_cache;
 static ID3D12PipelineLibrary1* g_d3d12_pipeline_library = nullptr;
 static std::atomic<uint32_t> g_compiled_shader_count{0};
 static std::atomic<uint64_t> g_last_shader_compile_tick{0};
 static std::atomic<bool> g_show_shader_compilation{true};
 
-static void NdPumpWindowMessages() {
-  HWND hwnd = g_game_hwnd;
-  if (hwnd && IsWindow(hwnd)) {
-    MSG msg;
-    while (PeekMessageW(&msg, hwnd, 0, 0, PM_REMOVE)) {
-      TranslateMessage(&msg);
-      DispatchMessageW(&msg);
+static void NdAppendPortablePso(uint64_t hash, const D3D12_GRAPHICS_PIPELINE_STATE_DESC* desc) {
+  if (!desc) return;
+  static std::mutex s_append_mtx;
+  std::lock_guard<std::mutex> lk(s_append_mtx);
+
+  std::error_code ec;
+  std::filesystem::create_directories("cache", ec);
+  std::ofstream out("cache/nd_portable_psos.bin", std::ios::binary | std::ios::app);
+  if (!out.is_open()) return;
+
+  uint32_t vs_size = static_cast<uint32_t>(desc->VS.BytecodeLength);
+  uint32_t ps_size = static_cast<uint32_t>(desc->PS.BytecodeLength);
+  uint32_t desc_size = sizeof(D3D12_GRAPHICS_PIPELINE_STATE_DESC);
+
+  out.write(reinterpret_cast<const char*>(&hash), sizeof(hash));
+  out.write(reinterpret_cast<const char*>(&vs_size), sizeof(vs_size));
+  out.write(reinterpret_cast<const char*>(&ps_size), sizeof(ps_size));
+  out.write(reinterpret_cast<const char*>(&desc_size), sizeof(desc_size));
+
+  D3D12_GRAPHICS_PIPELINE_STATE_DESC copy = *desc;
+  copy.pRootSignature = nullptr;
+  copy.VS.pShaderBytecode = nullptr;
+  copy.PS.pShaderBytecode = nullptr;
+  copy.InputLayout.pInputElementDescs = nullptr;
+  copy.StreamOutput.pSODeclaration = nullptr;
+  out.write(reinterpret_cast<const char*>(&copy), sizeof(copy));
+
+  if (vs_size > 0 && desc->VS.pShaderBytecode) {
+    out.write(reinterpret_cast<const char*>(desc->VS.pShaderBytecode), vs_size);
+  }
+  if (ps_size > 0 && desc->PS.pShaderBytecode) {
+    out.write(reinterpret_cast<const char*>(desc->PS.pShaderBytecode), ps_size);
+  }
+}
+
+static void NdSavePipelineLibraryCache() {
+  AcquireSRWLockExclusive(&g_pso_cache_srw);
+  if (g_d3d12_pipeline_library) {
+    SIZE_T ser_sz = g_d3d12_pipeline_library->GetSerializedSize();
+    if (ser_sz > 0) {
+      std::vector<uint8_t> ser_data(ser_sz);
+      if (SUCCEEDED(g_d3d12_pipeline_library->Serialize(ser_data.data(), ser_sz))) {
+        std::error_code ec;
+        std::filesystem::create_directories("cache", ec);
+        std::ofstream out("cache/d3d12_pipeline_cache.bin", std::ios::binary | std::ios::trunc);
+        if (out.is_open()) {
+          out.write(reinterpret_cast<const char*>(ser_data.data()), ser_sz);
+        }
+      }
     }
   }
+  ReleaseSRWLockExclusive(&g_pso_cache_srw);
 }
 
 //=============================================================================
@@ -1428,65 +1475,73 @@ extern "C" HRESULT STDMETHODCALLTYPE NdCreateGraphicsPipelineStateDetour(
     hash ^= NdFnv1a64(pDesc->PS.pShaderBytecode, pDesc->PS.BytecodeLength);
   }
 
-  // 1. Consulta rapida en cache en memoria
-  {
-    std::lock_guard<std::mutex> lk(g_d3d12_pso_mtx);
-    auto it = g_d3d12_pso_map.find(hash);
-    if (it != g_d3d12_pso_map.end() && it->second != nullptr) {
-      it->second->AddRef();
-      *ppPipelineState = it->second;
-      return S_OK;
-    }
+  // 1. FAST PATH: Consulta inmediata en cache en memoria (< 0.001 ms) con candado compartido
+  AcquireSRWLockShared(&g_pso_cache_srw);
+  auto it = g_pso_memory_cache.find(hash);
+  if (it != g_pso_memory_cache.end() && it->second != nullptr) {
+    it->second->AddRef();
+    *ppPipelineState = it->second;
+    ReleaseSRWLockShared(&g_pso_cache_srw);
+    return S_OK;
+  }
+  ReleaseSRWLockShared(&g_pso_cache_srw);
+
+  AcquireSRWLockExclusive(&g_pso_cache_srw);
+  // Doble comprobacion bajo bloqueo exclusivo
+  it = g_pso_memory_cache.find(hash);
+  if (it != g_pso_memory_cache.end() && it->second != nullptr) {
+    it->second->AddRef();
+    *ppPipelineState = it->second;
+    ReleaseSRWLockExclusive(&g_pso_cache_srw);
+    return S_OK;
   }
 
   wchar_t pso_name[64];
   swprintf_s(pso_name, L"PSO_%016llX", hash);
 
   // 2. Inicializacion bajo demanda de ID3D12PipelineLibrary1 desde cache/d3d12_pipeline_cache.bin
-  {
-    std::lock_guard<std::mutex> lk(g_d3d12_pso_mtx);
-    if (!g_d3d12_pipeline_library && This) {
-      ID3D12Device1* dev1 = nullptr;
-      if (SUCCEEDED(This->QueryInterface(IID_PPV_ARGS(&dev1))) && dev1) {
-        std::vector<uint8_t> init_blob;
-        std::filesystem::path pso_path = "cache/d3d12_pipeline_cache.bin";
-        std::error_code ec;
-        if (std::filesystem::exists(pso_path, ec)) {
-          std::ifstream in(pso_path, std::ios::binary | std::ios::ate);
-          if (in.is_open()) {
-            size_t sz = static_cast<size_t>(in.tellg());
-            if (sz > 0) {
-              init_blob.resize(sz);
-              in.seekg(0, std::ios::beg);
-              in.read(reinterpret_cast<char*>(init_blob.data()), sz);
-            }
+  if (!g_d3d12_pipeline_library && This) {
+    ID3D12Device1* dev1 = nullptr;
+    if (SUCCEEDED(This->QueryInterface(IID_PPV_ARGS(&dev1))) && dev1) {
+      std::vector<uint8_t> init_blob;
+      std::filesystem::path pso_path = "cache/d3d12_pipeline_cache.bin";
+      std::error_code ec;
+      if (std::filesystem::exists(pso_path, ec)) {
+        std::ifstream in(pso_path, std::ios::binary | std::ios::ate);
+        if (in.is_open()) {
+          size_t sz = static_cast<size_t>(in.tellg());
+          if (sz > 0) {
+            init_blob.resize(sz);
+            in.seekg(0, std::ios::beg);
+            in.read(reinterpret_cast<char*>(init_blob.data()), sz);
           }
         }
-        HRESULT hr_lib = E_FAIL;
-        if (!init_blob.empty()) {
-          hr_lib = dev1->CreatePipelineLibrary(
-              init_blob.data(), init_blob.size(),
-              IID_PPV_ARGS(&g_d3d12_pipeline_library));
-        }
-        if (FAILED(hr_lib) || !g_d3d12_pipeline_library) {
-          dev1->CreatePipelineLibrary(
-              nullptr, 0,
-              IID_PPV_ARGS(&g_d3d12_pipeline_library));
-        }
-        dev1->Release();
       }
+      HRESULT hr_lib = E_FAIL;
+      if (!init_blob.empty()) {
+        hr_lib = dev1->CreatePipelineLibrary(
+            init_blob.data(), init_blob.size(),
+            IID_PPV_ARGS(&g_d3d12_pipeline_library));
+      }
+      if (FAILED(hr_lib) || !g_d3d12_pipeline_library) {
+        dev1->CreatePipelineLibrary(
+            nullptr, 0,
+            IID_PPV_ARGS(&g_d3d12_pipeline_library));
+      }
+      dev1->Release();
     }
+  }
 
-    // 3. Carga desde PipelineLibrary si ya existe
-    if (g_d3d12_pipeline_library) {
-      ID3D12PipelineState* lib_pso = nullptr;
-      HRESULT hr_lib = g_d3d12_pipeline_library->LoadGraphicsPipeline(
-          pso_name, pDesc, riid, reinterpret_cast<void**>(&lib_pso));
-      if (SUCCEEDED(hr_lib) && lib_pso) {
-        g_d3d12_pso_map[hash] = lib_pso;
-        *ppPipelineState = lib_pso;
-        return S_OK;
-      }
+  // 3. Carga desde PipelineLibrary si ya existe
+  if (g_d3d12_pipeline_library) {
+    ID3D12PipelineState* lib_pso = nullptr;
+    HRESULT hr_lib = g_d3d12_pipeline_library->LoadGraphicsPipeline(
+        pso_name, pDesc, riid, reinterpret_cast<void**>(&lib_pso));
+    if (SUCCEEDED(hr_lib) && lib_pso) {
+      g_pso_memory_cache[hash] = lib_pso;
+      *ppPipelineState = lib_pso;
+      ReleaseSRWLockExclusive(&g_pso_cache_srw);
+      return S_OK;
     }
   }
 
@@ -1495,32 +1550,21 @@ extern "C" HRESULT STDMETHODCALLTYPE NdCreateGraphicsPipelineStateDetour(
   if (SUCCEEDED(hr) && ppPipelineState && *ppPipelineState) {
     auto* compiled_pso = reinterpret_cast<ID3D12PipelineState*>(*ppPipelineState);
     compiled_pso->AddRef();
-
-    {
-      std::lock_guard<std::mutex> lk(g_d3d12_pso_mtx);
-      g_d3d12_pso_map[hash] = compiled_pso;
-      if (g_d3d12_pipeline_library) {
-        g_d3d12_pipeline_library->StorePipeline(pso_name, compiled_pso);
-        SIZE_T ser_sz = g_d3d12_pipeline_library->GetSerializedSize();
-        if (ser_sz > 0) {
-          std::vector<uint8_t> ser_data(ser_sz);
-          if (SUCCEEDED(g_d3d12_pipeline_library->Serialize(ser_data.data(), ser_sz))) {
-            std::error_code ec;
-            std::filesystem::create_directories("cache", ec);
-            std::ofstream out("cache/d3d12_pipeline_cache.bin", std::ios::binary | std::ios::trunc);
-            if (out.is_open()) {
-              out.write(reinterpret_cast<const char*>(ser_data.data()), ser_sz);
-            }
-          }
-        }
-      }
+    g_pso_memory_cache[hash] = compiled_pso;
+    if (g_d3d12_pipeline_library) {
+      g_d3d12_pipeline_library->StorePipeline(pso_name, compiled_pso);
     }
+    ReleaseSRWLockExclusive(&g_pso_cache_srw);
+
+    // Registro ligero en append para cache portable (sin serializar la libreria de 50MB en gameplay)
+    NdAppendPortablePso(hash, pDesc);
 
     g_compiled_shader_count.fetch_add(1, std::memory_order_relaxed);
     g_last_shader_compile_tick.store(GetTickCount64(), std::memory_order_relaxed);
-    NdEnsureShaderOsdWindow();
-    NdPumpWindowMessages();
+    return hr;
   }
+
+  ReleaseSRWLockExclusive(&g_pso_cache_srw);
   return hr;
 }
 
@@ -1611,40 +1655,26 @@ void NdSilenceXctdLog() {
     return;
   }
   uint8_t* base = reinterpret_cast<uint8_t*>(mod);
-  constexpr size_t kRva = 0x3DB042;
+  constexpr size_t kRva = 0x3E9143;
   uint8_t* target = base + kRva;
-  // 85 C0 0F 84 34 02 00 00 (test eax, eax; je 0x3db27e)
-  static const uint8_t kExpected[8] = {0x85, 0xC0, 0x0F, 0x84, 0x34, 0x02, 0x00, 0x00};
-  // E9 37 02 00 00 90 90 90 (jmp 0x3db27e; 3x NOP)
-  static const uint8_t kPatched[8] = {0xE9, 0x37, 0x02, 0x00, 0x00, 0x90, 0x90, 0x90};
-  if (std::memcmp(target, kPatched, sizeof(kPatched)) == 0 ||
-      (target[0] == 0x8D && target[1] == 0x0D)) {
-    if (target[0] == 0x8D && target[1] == 0x0D) {
-      DWORD old_protect = 0;
-      if (VirtualProtect(target, 8, PAGE_EXECUTE_READWRITE, &old_protect) != 0) {
-        std::memset(target, 0x90, 8);
-        DWORD ignored = 0;
-        VirtualProtect(target, 8, old_protect, &ignored);
-        FlushInstructionCache(GetCurrentProcess(), target, 8);
-      }
-    }
-    s_done.store(true, std::memory_order_relaxed);
-    REXLOG_INFO("neverdead: [XCTD-SILENCE] error logs de XFileXctdCompressionInformation silenciados (rexruntime+0x{:X})", kRva);
-    return;
-  }
-  if (std::memcmp(target, kExpected, sizeof(kExpected)) != 0) {
-    REXLOG_ERROR("neverdead: [XCTD-SILENCE] bytes inesperados en rexruntime+0x{:X}; no se parchea", kRva);
-    s_done.store(true, std::memory_order_relaxed);
-    return;
-  }
+  // 0F 8F 04 02 00 00 (jg 0x3E934D)
+  static const uint8_t kExpected[6] = {0x0F, 0x8F, 0x04, 0x02, 0x00, 0x00};
+  // E9 05 02 00 00 90 (jmp 0x3E934D; NOP)
+  static const uint8_t kPatched[6] = {0xE9, 0x05, 0x02, 0x00, 0x00, 0x90};
+
   DWORD old_protect = 0;
   if (VirtualProtect(target, sizeof(kPatched), PAGE_EXECUTE_READWRITE, &old_protect) != 0) {
-    std::memcpy(target, kPatched, sizeof(kPatched));
-    DWORD ignored = 0;
-    VirtualProtect(target, sizeof(kPatched), old_protect, &ignored);
-    FlushInstructionCache(GetCurrentProcess(), target, sizeof(kPatched));
-    s_done.store(true, std::memory_order_relaxed);
-    REXLOG_INFO("neverdead: [XCTD-SILENCE] error logs de XFileXctdCompressionInformation silenciados (rexruntime+0x{:X})", kRva);
+    if (std::memcmp(target, kExpected, sizeof(kExpected)) == 0) {
+      std::memcpy(target, kPatched, sizeof(kPatched));
+      FlushInstructionCache(GetCurrentProcess(), target, sizeof(kPatched));
+      s_done.store(true, std::memory_order_relaxed);
+      REXLOG_INFO("neverdead: [XCTD-SILENCE] error logs de XFileXctdCompressionInformation silenciados (rexruntime+0x{:X})", kRva);
+    } else if (std::memcmp(target, kPatched, sizeof(kPatched)) == 0) {
+      s_done.store(true, std::memory_order_relaxed);
+    } else {
+      REXLOG_WARN("neverdead: [XCTD-SILENCE] bytes inesperados en rexruntime+0x{:X}; no se parchea", kRva);
+    }
+    VirtualProtect(target, sizeof(kPatched), old_protect, &old_protect);
   }
 }
 //=============================================================================
@@ -1839,6 +1869,61 @@ void NdSilenceSpamLogs() {
   }
 }
 
+//=============================================================================
+// Intercepcion VBlank y Despacho de Interrupcion en rexgpu-xenos.dll
+//=============================================================================
+using NdDispatchInterruptFn = void(*)(void* xenos, uint32_t interrupt_type, uint32_t thread_index);
+static NdDispatchInterruptFn g_fn_dispatch_interrupt = nullptr;
+static void* g_xenos_device_instance = nullptr;
+
+using NdSetInterruptCallbackFn = void(*)(void* This, uint32_t cb_va, uint32_t ctx_data);
+static NdSetInterruptCallbackFn g_real_set_interrupt_callback = nullptr;
+
+static void NdSetInterruptCallbackDetour(void* This, uint32_t cb_va, uint32_t ctx_data) {
+  g_xenos_device_instance = This;
+  if (NdIsDiagEnabled()) {
+    REXLOG_INFO("neverdead: [VBLANK] SetInterruptCallback capturado: This={:p}, cb=0x{:08X}, ctx=0x{:08X}",
+                This, cb_va, ctx_data);
+  }
+  if (g_real_set_interrupt_callback) {
+    g_real_set_interrupt_callback(This, cb_va, ctx_data);
+  }
+}
+
+void NdInstallVBlankInterruptHook() {
+  static std::atomic<bool> s_done{false};
+  if (s_done.exchange(true)) return;
+
+  HMODULE mod = GetModuleHandleA("rexgpu-xenos.dll");
+  if (!mod) return;
+  uint8_t* base = reinterpret_cast<uint8_t*>(mod);
+
+  // DispatchInterrupt esta en RVA 0xD390
+  g_fn_dispatch_interrupt = reinterpret_cast<NdDispatchInterruptFn>(base + 0xD390);
+
+  // Vtable entries para SetInterruptCallback: RVA 0x174458 y 0x17cb28
+  const size_t vtable_rvas[] = {0x174458, 0x17cb28};
+  for (size_t rva : vtable_rvas) {
+    void** slot = reinterpret_cast<void**>(base + rva);
+    DWORD old_protect = 0;
+    if (VirtualProtect(slot, sizeof(void*), PAGE_READWRITE, &old_protect)) {
+      if (!g_real_set_interrupt_callback) {
+        g_real_set_interrupt_callback = reinterpret_cast<NdSetInterruptCallbackFn>(*slot);
+      }
+      *slot = reinterpret_cast<void*>(&NdSetInterruptCallbackDetour);
+      VirtualProtect(slot, sizeof(void*), old_protect, &old_protect);
+      FlushInstructionCache(GetCurrentProcess(), slot, sizeof(void*));
+    }
+  }
+  REXLOG_INFO("neverdead: [VBLANK] Hook de SetInterruptCallback y DispatchInterrupt instalado");
+}
+
+void NdPulseVBlankInterrupt() {
+  if (g_xenos_device_instance && g_fn_dispatch_interrupt) {
+    g_fn_dispatch_interrupt(g_xenos_device_instance, 1, 0);
+  }
+}
+
 void NdEarlyInit() {
   NdLoadSettingsFromIni();
   // Granularidad de 1 ms para el pacer (Sleep del hilo que presenta).
@@ -1856,6 +1941,7 @@ void NdEarlyInit() {
   NdSilenceSpamLogs();
   NdPatchAsyncPipelineCache();
   nd_install_d3d12_device_hook();
+  NdInstallVBlankInterruptHook();
 }
 void NdVdSetDisplayModeHook(PPCRegister& r3) {
   const uint32_t mode = r3.u32;
@@ -2662,7 +2748,17 @@ void NdVdSwapPostHook(PPCRegister& r31) {
     // Si target_fps <= 0.0f -> 0.0f (sin pacing, ilimitado)
   }
 
+  // En modo ilimitado en 3D, pulsar VBlank inmediatamente para no retrasar el bucle de render
+  if (target_fps <= 0.0f && g_in_3d_gameplay.load(std::memory_order_relaxed)) {
+    NdPulseVBlankInterrupt();
+  }
+
   NdPaceGuestAfterSwapComplete(target_fps, swap_count);
+
+  // En modo limitado (60 o 30 FPS), pulsar VBlank despues del pacer
+  if (target_fps > 0.0f || !g_in_3d_gameplay.load(std::memory_order_relaxed)) {
+    NdPulseVBlankInterrupt();
+  }
 }
 
 static void NdDumpAsuraCVarsOnce() {
@@ -2894,8 +2990,8 @@ void NdLoadSettingsFromIni() {
   bool luma_opt = (_wcsicmp(buf, L"false") != 0 && _wcsicmp(buf, L"0") != 0);
   g_opt_luma_resolve.store(luma_opt, std::memory_order_relaxed);
 
-  int fps = GetPrivateProfileIntW(L"Graphics", L"TargetFPS", 30, ini.c_str());
-  float target = static_cast<float>(fps);
+  int fps = GetPrivateProfileIntW(L"Graphics", L"TargetFPS", 0, ini.c_str());
+  float target = (fps <= 0 && unlock) ? 0.0f : static_cast<float>(fps);
 
   // Sobrescritura por variables de entorno si estan presentes
   const char* env_unlock = std::getenv("ND_UNLOCK_FPS");
@@ -3558,6 +3654,10 @@ static void NdInitFpsMode() {
   }
   NdLoadSettingsFromIni();
   float target = g_fps_target.load(std::memory_order_relaxed);
+  bool unlock = g_unlock_fps.load(std::memory_order_relaxed);
+  if (unlock && target <= 0.0f) {
+    target = 0.0f;
+  }
   const char* env_unlock = std::getenv("ND_UNLOCK_FPS");
   if (env_unlock != nullptr && env_unlock[0] == '1') {
     g_unlock_fps.store(true, std::memory_order_relaxed);
@@ -3566,9 +3666,9 @@ static void NdInitFpsMode() {
   const char* env = std::getenv("ND_FPS_LIMIT");
   if (env != nullptr) {
     const float v = static_cast<float>(std::atof(env));
-    if (v > 0.0f && v <= 1000.0f) {
+    if (v >= 0.0f && v <= 1000.0f) {
       target = v;
-      if (v > 30.0f) {
+      if (v > 30.0f || v == 0.0f) {
         g_unlock_fps.store(true, std::memory_order_relaxed);
       }
     }

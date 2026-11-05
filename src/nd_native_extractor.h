@@ -393,32 +393,15 @@ inline void PrebuildShaderCache(const std::filesystem::path& root_dir) {
   std::filesystem::path catalog_path = cache_dir / "shader_catalog.bin";
   std::filesystem::path pso_path = cache_dir / "d3d12_pipeline_cache.bin";
 
-  // Eliminar shader_catalog.bin obsoleto/inflado si existe para ahorrar espacio
+  // Si existe shader_catalog.bin inflado u obsoleto, eliminarlo
   if (std::filesystem::exists(catalog_path, ec)) {
     std::filesystem::remove(catalog_path, ec);
   }
 
-  // Si d3d12_pipeline_cache.bin no existe o mide <= 8 bytes, poblarlo con entradas reales
-  auto pso_size = std::filesystem::exists(pso_path, ec) ? std::filesystem::file_size(pso_path, ec) : 0ULL;
-  if (pso_size <= 8) {
-    std::ofstream out(pso_path, std::ios::binary | std::ios::trunc);
-    if (out.is_open()) {
-      const char magic[8] = {'N', 'D', 'P', 'C', 0, 0, 0, 1};
-      out.write(magic, 8);
-
-      const uint32_t pso_count = 6;
-      out.write(reinterpret_cast<const char*>(&pso_count), sizeof(pso_count));
-      for (uint32_t i = 0; i < pso_count; ++i) {
-        uint64_t pso_hash = 0x82D3D12000000000ULL | (i * 0x37ULL + 1);
-        uint64_t vs_hash = 0x4B4E081F82000000ULL | (i * 2 * 0x1F4DLL + 0x101);
-        uint64_t ps_hash = 0x4B4E081F82000000ULL | ((i * 2 + 1) * 0x1F4DLL + 0x101);
-        uint32_t flags = 1;
-        out.write(reinterpret_cast<const char*>(&pso_hash), sizeof(pso_hash));
-        out.write(reinterpret_cast<const char*>(&vs_hash), sizeof(vs_hash));
-        out.write(reinterpret_cast<const char*>(&ps_hash), sizeof(ps_hash));
-        out.write(reinterpret_cast<const char*>(&flags), sizeof(flags));
-      }
-    }
+  // Pre-crear estructura limpia de cache portable
+  std::filesystem::path portable_psos = cache_dir / "nd_portable_psos.bin";
+  if (!std::filesystem::exists(portable_psos, ec)) {
+    std::ofstream out(portable_psos, std::ios::binary | std::ios::trunc);
   }
 }
 

@@ -123,9 +123,11 @@ def prepare_staging():
     if os.path.exists(cache_src):
         for root, dirs, files in os.walk(cache_src):
             for f in files:
-                if f.lower() == "shader_catalog.bin":
+                f_lower = f.lower()
+                # Excluir caches locales pesados, no-portables o catalogos obsoletos
+                if f_lower in {"shader_catalog.bin", "nd_portable_psos.bin", "d3d12_pipeline_cache.bin"}:
                     continue
-                ext = os.path.splitext(f.lower())[1]
+                ext = os.path.splitext(f_lower)[1]
                 if ext in {".bin", ".xpso", ".xsh"}:
                     rel_p = os.path.relpath(os.path.join(root, f), cache_src)
                     dst_p = os.path.join(cache_dst, rel_p)
