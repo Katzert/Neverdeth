@@ -1,0 +1,16 @@
+# Native CRT overrides via the ReXGlue [rexcrt] table.
+#
+# Each `Name = 0xVA` entry redirects calls to that guest address to the
+# corresponding `rexcrt_<Name>` implementation exported by rexruntime.dll,
+# matching the PowerPC argument ABI (r3..r6 -> return in r3).
+#
+# Heap functions (RtlAllocateHeap / RtlFreeHeap / RtlReAllocateHeap / RtlSizeHeap)
+# are intentionally omitted: the [rexcrt] heap group requires all four to match
+# the NT Rtl*Heap signature (r3=heap, r4=flags, r5=ptr/size), and the guest
+# lacks a matching RtlSizeHeap equivalent.
+
+[rexcrt]
+memcpy = 0x8278AE60
+memset = 0x8278ADC0
+strchr = 0x82788D90
+strncpy = 0x82788970

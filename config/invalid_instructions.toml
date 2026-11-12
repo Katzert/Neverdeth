@@ -1,0 +1,24 @@
+# Explicit embedded-data hints (`invalidInstructionHints`: guest VA -> size in bytes)
+# for regions in .rdata whose bytes accidentally decode as valid PPC instructions
+# or represent large NUL padding gaps.
+
+# Contiguous ASCII strings in .rdata: "Fall\0\0\0\0" x2 + "Blocked\0" (24 bytes).
+# Prevents the analyzer from decoding ASCII text as PPC instructions.
+[[invalid_instructions]]
+data = 0x82059704
+size = 24
+
+# NUL padding gap in .rdata (508 bytes).
+[[invalid_instructions]]
+data = 0x8201A0D4
+size = 508
+
+# NUL padding gap in .rdata (256 bytes).
+[[invalid_instructions]]
+data = 0x8202D9E0
+size = 256
+
+# NUL padding gap in .rdata (256 bytes).
+[[invalid_instructions]]
+data = 0x8202DBE0
+size = 256

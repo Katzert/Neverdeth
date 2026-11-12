@@ -1,0 +1,30 @@
+# Secondary entry points (vtable adjustor thunks or leaf getters) swallowed by
+# an enclosing .pdata extent. Declared as codegen chunks (`parent` = enclosing
+# .pdata start, `end` = block terminator address) so external tail calls resolve.
+# Do not add addresses already declared standalone in .pdata.
+
+[functions."0x8224CFF8"]
+parent = 2183450440   # 0x8224CF48
+# Extends to 0x8224D060 rather than 0x8224D048 because `beq cr6, 0x8224D048`
+# at 0x8224D000 continues to `blr` at 0x8224D05C before the next .pdata entry.
+end = 2183450720      # 0x8224D060
+
+[functions."0x8225BCA0"]
+parent = 2183510784   # 0x8225BB00
+end = 2183511220      # 0x8225BCB4
+
+[functions."0x82504120"]
+parent = 2186297464   # 0x82504078
+end = 2186297660      # 0x8250413C
+
+[functions."0x82504220"]
+parent = 2186297728   # 0x82504180
+end = 2186297908      # 0x82504234
+
+[functions."0x82524760"]
+parent = 2186430184   # 0x825246E8
+end = 2186430324      # 0x82524774
+
+[functions."0x82564A40"]
+parent = 2186692552   # 0x825647C8
+end = 2186693284      # 0x82564AA4

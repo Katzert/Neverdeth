@@ -1,0 +1,43 @@
+# ReXGlue mid-ASM hooks for native runtime instrumentation.
+# Declarations live in src/nd_hooks.h.
+
+# VdInitializeEngines call site inside sub_826BC390.
+[[midasm_hook]]
+address = 0x826BC3FC
+name = "NdVdInitHook"
+
+# VdSwap call site inside sub_826B8620; r31 holds the D3D device pointer.
+[[midasm_hook]]
+address = 0x826B89A0
+name = "NdVdSwapHook"
+registers = ["r31"]
+
+# Post-swap site after `stw r11, 48(r31)` (loc_826B89AC) once the frame is queued.
+[[midasm_hook]]
+address = 0x826B8DCC
+name = "NdVdSwapPostHook"
+registers = ["r31"]
+
+# VdSetDisplayMode hook; r3 points to the guest X_VIDEO_MODE struct.
+[[midasm_hook]]
+address = 0x826BC264
+name = "NdVdSetDisplayModeHook"
+registers = ["r3"]
+
+# Clamp presentation interval to 1 VBlank in sub_826B78D8 (before `slwi r11, r11, 8`).
+[[midasm_hook]]
+address = 0x826B79D8
+name = "NdForceIntervalOneHook"
+registers = ["r11"]
+
+# Adjust Asura render thread wait timeout in sub_826BE8C0.
+[[midasm_hook]]
+address = 0x826BE900
+name = "NdAdjustRenderTimeoutHook"
+registers = ["r11"]
+
+# Override Asura engine simulation rate in sub_824DADF8 (f0 carries target FPS).
+[[midasm_hook]]
+address = 0x824DAE70
+name = "NdSetFpsLimitHook"
+registers = ["f0"]

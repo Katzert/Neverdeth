@@ -1,0 +1,44 @@
+# Neverdeth (NeverDead PC Recompilation) — Git Ignore Rules
+/assets/
+/cache/
+/dist/
+/build_clang/
+/out/
+/generated/
+/FMV
+/Fonts
+/GUIMenu
+/misc
+/sounds
+/Text
+
+# Build artifacts and binaries
+*.exe
+*.dll
+*.pdb
+*.obj
+*.res
+*.dmp
+*.log
+*.bin
+
+# Python cache
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Proprietary assets (Zero tolerance)
+*.xex
+*.iso
+*.data
+*.asrbe
+*.asrBE
+*.bik
+
+# Media rules and branding exceptions
+*.bmp
+*.png
+
+!docs/assets/neverdeth_logo_banner.bmp
+!docs/assets/neverdeth_logo_transparent.png
+!config/neverdeth.ico

@@ -1,0 +1,19 @@
+# ReXGlue manifest for NeverDead (clean unshifted recompilation from retail XEX)
+[project]
+name = "neverdead"
+sdk_version = "0.10.0"
+game_root = "."
+
+[entrypoint]
+file_path = "assets/default.xex"
+out_directory_path = "generated/neverdead_default"
+includes = [
+    "config/vtables.toml",
+    "config/gap_chunks.toml",
+    "config/crt.toml",
+    "config/analysis.toml",
+    "config/invalid_instructions.toml",
+    "config/mid_asm_hooks.toml",
+    "config/thunks.toml",
+    "config/codegen.toml",
+]

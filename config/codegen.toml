@@ -1,0 +1,15 @@
+# Local register optimization directives for ReXGlue codegen.
+# cr, ctr, and xer are function-local and can be promoted to x64 local variables.
+cr_as_local = true
+ctr_as_local = true
+xer_as_local = true
+
+# reserved (r1, r2, r13) and non_volatile (r14..r31) must remain in PPCContext
+# for interoperability with CRT stack save/restore helpers and indirect-call traps.
+reserved_as_local = false
+non_volatile_as_local = false
+
+# Must remain false to preserve ABI compatibility across indirect calls.
+skip_lr = false
+skip_msr = false
+non_argument_as_local = false
